@@ -40,6 +40,20 @@ class GoodProvider(LLMProvider):
         ]
 
 
+class ExplodingProvider(LLMProvider):
+    def generate_sections(
+        self, facts: list[AtomicFact], feedback_summary: str
+    ) -> list[ReportSection]:
+        raise RuntimeError("provider timeout")
+
+
+class InvalidProvider(LLMProvider):
+    def generate_sections(
+        self, facts: list[AtomicFact], feedback_summary: str
+    ) -> list[ReportSection]:
+        return None
+
+
 def _fact() -> AtomicFact:
     now = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
     return AtomicFact(
@@ -61,9 +75,9 @@ def _fact() -> AtomicFact:
     )
 
 
-def test_bad_llm_output_falls_back_to_template_report():
-    result = generate_with_optional_llm(
-        provider=BadProvider(),
+def _generate(provider: LLMProvider | None):
+    return generate_with_optional_llm(
+        provider=provider,
         report_id="report-001",
         run_id="run-001",
         report_date="2026-07-02",
@@ -74,6 +88,18 @@ def test_bad_llm_output_falls_back_to_template_report():
         html_path="reports/briefing.html",
         fact_ledger_path="reports/fact_ledger.json",
     )
+
+
+def test_missing_provider_returns_template_report():
+    result = _generate(provider=None)
+
+    assert result.used_fallback is True
+    assert result.validation_errors == []
+    assert result.report.sections[0].section_id == "market_indices"
+
+
+def test_bad_llm_output_falls_back_to_template_report():
+    result = _generate(provider=BadProvider())
 
     assert result.used_fallback is True
     assert result.validation_errors == [
@@ -84,18 +110,23 @@ def test_bad_llm_output_falls_back_to_template_report():
 
 
 def test_good_llm_output_is_used():
-    result = generate_with_optional_llm(
-        provider=GoodProvider(),
-        report_id="report-001",
-        run_id="run-001",
-        report_date="2026-07-02",
-        report_type=ReportType.AFTER_CLOSE,
-        facts=[_fact()],
-        feedback_summary="",
-        markdown_path="reports/briefing.md",
-        html_path="reports/briefing.html",
-        fact_ledger_path="reports/fact_ledger.json",
-    )
+    result = _generate(provider=GoodProvider())
 
     assert result.used_fallback is False
     assert result.report.sections[0].body == "上证指数收涨。[fact-001]"
+
+
+def test_provider_exception_falls_back_to_template_report():
+    result = _generate(provider=ExplodingProvider())
+
+    assert result.used_fallback is True
+    assert result.validation_errors == ["provider failed: provider timeout"]
+    assert result.report.sections[0].section_id == "market_indices"
+
+
+def test_invalid_provider_sections_fall_back_to_template_report():
+    result = _generate(provider=InvalidProvider())
+
+    assert result.used_fallback is True
+    assert result.validation_errors == ["provider returned invalid sections"]
+    assert result.report.sections[0].section_id == "market_indices"

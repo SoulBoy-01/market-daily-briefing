@@ -51,7 +51,24 @@ def generate_with_optional_llm(
             validation_errors=[],
         )
 
-    sections = provider.generate_sections(facts, feedback_summary)
+    try:
+        sections = provider.generate_sections(facts, feedback_summary)
+    except Exception as exc:
+        return GeneratedReportResult(
+            report=fallback,
+            used_fallback=True,
+            validation_errors=[f"provider failed: {exc}"],
+        )
+
+    if not isinstance(sections, list) or not all(
+        isinstance(section, ReportSection) for section in sections
+    ):
+        return GeneratedReportResult(
+            report=fallback,
+            used_fallback=True,
+            validation_errors=["provider returned invalid sections"],
+        )
+
     validation = validate_report_sections(sections, facts)
     if not validation.ok:
         return GeneratedReportResult(
