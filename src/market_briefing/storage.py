@@ -12,6 +12,7 @@ from typing import Any
 from market_briefing.domain import (
     AtomicFact,
     FactClassification,
+    FeedbackEntry,
     RawSnapshot,
     Report,
     ReportSection,
@@ -317,6 +318,45 @@ class BriefingStore:
             fact_ledger_path=row["fact_ledger_path"],
         )
 
+    def save_feedback(self, entry: FeedbackEntry) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                insert into feedback (
+                    feedback_id, report_id, section_id, score, tags, note, created_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.feedback_id,
+                    entry.report_id,
+                    entry.section_id,
+                    entry.score,
+                    _to_json(list(entry.tags)),
+                    entry.note,
+                    entry.created_at.isoformat(),
+                ),
+            )
+
+    def list_feedback(self, report_id: str) -> list[FeedbackEntry]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "select * from feedback where report_id = ? order by created_at, feedback_id",
+                (report_id,),
+            ).fetchall()
+        return [
+            FeedbackEntry(
+                feedback_id=row["feedback_id"],
+                report_id=row["report_id"],
+                section_id=row["section_id"],
+                score=row["score"],
+                tags=json.loads(row["tags"]),
+                note=row["note"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
 
 def _to_json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
@@ -394,5 +434,15 @@ create table if not exists reports (
     markdown_path text not null,
     html_path text not null,
     fact_ledger_path text not null
+);
+
+create table if not exists feedback (
+    feedback_id text primary key,
+    report_id text not null,
+    section_id text not null,
+    score integer not null,
+    tags text not null,
+    note text not null,
+    created_at text not null
 );
 """
