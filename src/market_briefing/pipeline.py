@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.config import AppConfig, load_config
-from market_briefing.domain import Report, ReportType, Run
+from market_briefing.domain import AtomicFact, Report, ReportType, Run, RunStatus
 from market_briefing.reporting import build_report, render_html, render_markdown
 from market_briefing.storage import BriefingStore, build_report_paths
 from market_briefing.validation import validate_report_sections
@@ -50,7 +52,8 @@ def run_fixture_pipeline(
     )
     for snapshot in collection.snapshots:
         store.save_snapshot(snapshot)
-    store.save_facts(collection.facts)
+    facts = _scope_facts_to_run(collection.facts, request.run_id)
+    store.save_facts(facts)
 
     paths = build_report_paths(
         reports_dir=config.reports_dir,
@@ -65,19 +68,19 @@ def run_fixture_pipeline(
         run_id=request.run_id,
         report_date=request.report_date,
         report_type=request.report_type,
-        facts=collection.facts,
+        facts=facts,
         markdown_path=str(paths.markdown_path),
         html_path=str(paths.html_path),
         fact_ledger_path=str(paths.fact_ledger_path),
     )
-    validation = validate_report_sections(report.sections, collection.facts)
+    validation = validate_report_sections(report.sections, facts)
 
-    markdown = render_markdown(report, collection.facts)
+    markdown = render_markdown(report, facts)
     paths.markdown_path.write_text(markdown, encoding="utf-8")
     paths.html_path.write_text(render_html(markdown), encoding="utf-8")
     paths.fact_ledger_path.write_text(
         json.dumps(
-            [fact.to_record() for fact in collection.facts],
+            [fact.to_record() for fact in facts],
             ensure_ascii=False,
             indent=2,
         ),
@@ -85,7 +88,33 @@ def run_fixture_pipeline(
     )
 
     store.save_report(report)
+    store.save_run(
+        replace(
+            run,
+            status=(
+                RunStatus.COMPLETED
+                if validation.ok
+                else RunStatus.COMPLETED_WITH_WARNINGS
+            ),
+            completed_at=datetime.now(timezone.utc),
+            warning_count=len(validation.errors),
+        )
+    )
     return PipelineResult(report=report, validation_errors=validation.errors)
+
+
+def _scope_facts_to_run(facts: list[AtomicFact], run_id: str) -> list[AtomicFact]:
+    fact_id_map = {fact.fact_id: f"{fact.fact_id}:{run_id}" for fact in facts}
+    return [
+        replace(
+            fact,
+            fact_id=fact_id_map[fact.fact_id],
+            derived_from_fact_ids=tuple(
+                fact_id_map.get(fact_id, fact_id) for fact_id in fact.derived_from_fact_ids
+            ),
+        )
+        for fact in facts
+    ]
 
 
 def main() -> None:
@@ -114,6 +143,10 @@ def main() -> None:
         config=config,
         store=store,
     )
+    if result.validation_errors:
+        for error in result.validation_errors:
+            print(error, file=sys.stderr)
+        raise SystemExit(1)
     print(result.report.markdown_path)
 
 
