@@ -65,8 +65,12 @@ def test_fixture_reports_and_feedback_complete_acceptance_smoke(tmp_path):
     assert Path(after_close.report.html_path).exists()
     assert Path(after_close.report.fact_ledger_path).exists()
     assert Path(pre_open.report.markdown_path).exists()
+    assert Path(pre_open.report.html_path).exists()
+    assert Path(pre_open.report.fact_ledger_path).exists()
     assert len(store.list_snapshots("acceptance-after-close")) == 3
     assert len(store.list_facts("acceptance-after-close")) == 4
+    assert len(store.list_snapshots("acceptance-pre-open")) == 2
+    assert len(store.list_facts("acceptance-pre-open")) == 2
     assert feedback.note in summarize_feedback(
         store.list_feedback(after_close.report.report_id)
     )

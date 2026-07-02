@@ -42,8 +42,9 @@ Optional source adapter dependencies:
 
 ```powershell
 .\.venv\Scripts\python -m uvicorn market_briefing.app:app --host 127.0.0.1 --port 8000
-Start-Process "http://127.0.0.1:8000"
 ```
+
+Then open http://127.0.0.1:8000 in a browser, or use a second terminal/browser while uvicorn is running.
 
 ## Safety Boundary
 
