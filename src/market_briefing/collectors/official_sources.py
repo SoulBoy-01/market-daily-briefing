@@ -76,7 +76,7 @@ class OfficialSourceCollector:
             )
             facts.append(
                 AtomicFact(
-                    fact_id=f"fact-{target.module}-{index:03d}",
+                    fact_id=f"fact-{run_id}-{target.module}-{index:03d}",
                     run_id=run_id,
                     report_date=report_date,
                     report_type=report_type,

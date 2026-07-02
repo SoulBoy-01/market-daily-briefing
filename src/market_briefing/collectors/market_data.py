@@ -140,7 +140,7 @@ def _index_fact(
     fetched_at: datetime,
 ) -> AtomicFact:
     return AtomicFact(
-        fact_id=f"fact-market-index-{row_index:03d}",
+        fact_id=f"fact-{run_id}-market-index-{row_index:03d}",
         run_id=run_id,
         report_date=report_date,
         report_type=report_type,
@@ -168,7 +168,7 @@ def _sector_fact(
     fetched_at: datetime,
 ) -> AtomicFact:
     return AtomicFact(
-        fact_id=f"fact-sector-{row_index:03d}",
+        fact_id=f"fact-{run_id}-sector-{row_index:03d}",
         run_id=run_id,
         report_date=report_date,
         report_type=report_type,
