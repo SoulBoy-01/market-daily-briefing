@@ -19,6 +19,38 @@ def test_validate_feedback_rejects_score_outside_one_to_five():
     assert validate_feedback_entry(entry) == ["score must be between 1 and 5"]
 
 
+def test_validate_feedback_rejects_unknown_tag_with_exact_error():
+    entry = FeedbackEntry(
+        feedback_id="feedback-001",
+        report_id="report-001",
+        section_id="risk_points",
+        score=4,
+        tags=["unexpected_tag"],
+        note="Needs sharper risk context.",
+        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+    )
+
+    assert validate_feedback_entry(entry) == ["unknown feedback tags: unexpected_tag"]
+
+
+def test_validate_feedback_rejects_note_longer_than_240_characters():
+    entry = FeedbackEntry(
+        feedback_id="feedback-001",
+        report_id="report-001",
+        section_id="risk_points",
+        score=4,
+        tags=["insufficient_risk"],
+        note="x" * 241,
+        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+    )
+
+    assert validate_feedback_entry(entry) == ["note must be 240 characters or fewer"]
+
+
+def test_summarize_feedback_returns_exact_empty_context():
+    assert summarize_feedback([]) == "No previous feedback."
+
+
 def test_summarize_feedback_returns_compact_next_run_context():
     entries = [
         FeedbackEntry(
@@ -68,3 +100,41 @@ def test_store_round_trips_feedback(tmp_path):
     loaded = store.list_feedback("report-001")
 
     assert loaded == [entry]
+
+
+def test_list_feedback_orders_by_created_at_then_feedback_id(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    later_entry = FeedbackEntry(
+        feedback_id="feedback-001",
+        report_id="report-001",
+        section_id="risk_points",
+        score=3,
+        tags=["insufficient_risk"],
+        note="Later feedback.",
+        created_at=datetime(2026, 7, 2, 9, 5, tzinfo=timezone.utc),
+    )
+    tie_second = FeedbackEntry(
+        feedback_id="feedback-003",
+        report_id="report-001",
+        section_id="market_indices",
+        score=5,
+        tags=[],
+        note="Same timestamp, higher id.",
+        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+    )
+    tie_first = FeedbackEntry(
+        feedback_id="feedback-002",
+        report_id="report-001",
+        section_id="market_indices",
+        score=4,
+        tags=["unclear_citation"],
+        note="Same timestamp, lower id.",
+        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+    )
+
+    store.save_feedback(later_entry)
+    store.save_feedback(tie_second)
+    store.save_feedback(tie_first)
+
+    assert store.list_feedback("report-001") == [tie_first, tie_second, later_entry]
