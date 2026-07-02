@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import sqlite3
 
 import pytest
 
@@ -13,6 +14,22 @@ from market_briefing.domain import (
     SourceType,
 )
 from market_briefing.storage import BriefingStore, build_report_paths
+
+
+class TrackingConnection(sqlite3.Connection):
+    close_count = 0
+
+    def close(self) -> None:
+        type(self).close_count += 1
+        super().close()
+
+
+class TrackingStore(BriefingStore):
+    def connect(self) -> sqlite3.Connection:
+        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.database_path, factory=TrackingConnection)
+        connection.row_factory = sqlite3.Row
+        return connection
 
 
 def test_store_initializes_schema_and_round_trips_run(tmp_path):
@@ -32,6 +49,25 @@ def test_store_initializes_schema_and_round_trips_run(tmp_path):
     assert loaded.run_id == "run-001"
     assert loaded.report_type == ReportType.AFTER_CLOSE
     assert loaded.enabled_modules == ("market_indices",)
+
+
+def test_store_closes_connections_after_operations(tmp_path):
+    database_path = tmp_path / "briefing.sqlite"
+    store = TrackingStore(database_path)
+    run = Run.create(
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    TrackingConnection.close_count = 0
+
+    store.initialize()
+    store.save_run(run)
+    database_path.unlink()
+
+    assert TrackingConnection.close_count == 2
+    assert not database_path.exists()
 
 
 def test_store_round_trips_snapshot_fact_and_report(tmp_path):

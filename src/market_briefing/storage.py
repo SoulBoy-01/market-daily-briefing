@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -53,12 +55,24 @@ class BriefingStore:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self.connect()
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def initialize(self) -> None:
-        with self.connect() as connection:
+        with self.connection() as connection:
             connection.executescript(SCHEMA)
 
     def save_run(self, run: Run) -> None:
-        with self.connect() as connection:
+        with self.connection() as connection:
             connection.execute(
                 """
                 insert into runs (
@@ -92,7 +106,7 @@ class BriefingStore:
             )
 
     def get_run(self, run_id: str) -> Run | None:
-        with self.connect() as connection:
+        with self.connection() as connection:
             row = connection.execute("select * from runs where run_id = ?", (run_id,)).fetchone()
         if row is None:
             return None
@@ -113,7 +127,7 @@ class BriefingStore:
 
     def save_snapshot(self, snapshot: RawSnapshot) -> None:
         record = snapshot.to_record()
-        with self.connect() as connection:
+        with self.connection() as connection:
             connection.execute(
                 """
                 insert into source_snapshots (
@@ -147,7 +161,7 @@ class BriefingStore:
             )
 
     def list_snapshots(self, run_id: str) -> list[RawSnapshot]:
-        with self.connect() as connection:
+        with self.connection() as connection:
             rows = connection.execute(
                 "select * from source_snapshots where run_id = ? order by snapshot_id",
                 (run_id,),
@@ -170,7 +184,7 @@ class BriefingStore:
 
     def save_facts(self, facts: list[AtomicFact]) -> None:
         records = [fact.to_record() for fact in facts]
-        with self.connect() as connection:
+        with self.connection() as connection:
             connection.executemany(
                 """
                 insert into facts (
@@ -220,7 +234,7 @@ class BriefingStore:
             )
 
     def list_facts(self, run_id: str) -> list[AtomicFact]:
-        with self.connect() as connection:
+        with self.connection() as connection:
             rows = connection.execute(
                 "select * from facts where run_id = ? order by fact_id",
                 (run_id,),
@@ -250,7 +264,7 @@ class BriefingStore:
         ]
 
     def save_report(self, report: Report) -> None:
-        with self.connect() as connection:
+        with self.connection() as connection:
             connection.execute(
                 """
                 insert into reports (
@@ -282,7 +296,7 @@ class BriefingStore:
             )
 
     def get_report(self, report_id: str) -> Report:
-        with self.connect() as connection:
+        with self.connection() as connection:
             row = connection.execute(
                 "select * from reports where report_id = ?",
                 (report_id,),
