@@ -321,7 +321,19 @@ class BriefingStore:
     def list_reports(self) -> list[Report]:
         with self.connection() as connection:
             rows = connection.execute(
-                "select report_id from reports order by report_date desc, report_id desc"
+                """
+                select reports.report_id
+                from reports
+                left join runs on runs.run_id = reports.run_id
+                order by
+                    reports.report_date desc,
+                    coalesce(
+                        runs.completed_at,
+                        runs.created_at,
+                        reports.report_date || 'T00:00:00'
+                    ) desc,
+                    reports.report_id desc
+                """
             ).fetchall()
         return [self.get_report(row["report_id"]) for row in rows]
 

@@ -58,7 +58,12 @@
             <td>
               <div>{{ fact.source_name }}</div>
               <div class="muted">{{ fact.source_type.value }}</div>
-              <a href="{{ fact.source_url }}">{{ fact.source_url }}</a>
+              {% set source_href = fact.source_url|safe_source_url %}
+              {% if source_href %}
+                <a href="{{ source_href }}">{{ fact.source_url }}</a>
+              {% else %}
+                <span>{{ fact.source_url }}</span>
+              {% endif %}
               <div class="muted">published: {{ fact.published_at or "unknown" }}</div>
             </td>
             <td><code>{{ fact.raw_snapshot_path }}</code></td>

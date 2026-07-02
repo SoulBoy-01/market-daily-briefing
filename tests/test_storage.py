@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 import sqlite3
 
@@ -147,6 +148,69 @@ def test_get_report_raises_key_error_for_unknown_report(tmp_path):
 
     with pytest.raises(KeyError):
         store.get_report("missing-report")
+
+
+def test_latest_report_uses_run_timestamp_when_report_dates_match(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    older_run = Run.create(
+        run_id="z-older",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    newer_run = Run.create(
+        run_id="a-newer",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    older_run = replace(
+        older_run,
+        created_at=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 7, 2, 8, 5, tzinfo=timezone.utc),
+    )
+    newer_run = replace(
+        newer_run,
+        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 7, 2, 9, 5, tzinfo=timezone.utc),
+    )
+    older_report = Report(
+        report_id="report-z-older",
+        run_id=older_run.run_id,
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="Older report",
+        sections=[
+            ReportSection("market_indices", "Market indices", "Older", [], "ok"),
+        ],
+        markdown_path="reports/older.md",
+        html_path="reports/older.html",
+        fact_ledger_path="reports/older.json",
+    )
+    newer_report = Report(
+        report_id="report-a-newer",
+        run_id=newer_run.run_id,
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="Newer report",
+        sections=[
+            ReportSection("market_indices", "Market indices", "Newer", [], "ok"),
+        ],
+        markdown_path="reports/newer.md",
+        html_path="reports/newer.html",
+        fact_ledger_path="reports/newer.json",
+    )
+
+    store.save_run(older_run)
+    store.save_run(newer_run)
+    store.save_report(older_report)
+    store.save_report(newer_report)
+
+    reports = store.list_reports()
+
+    assert [report.report_id for report in reports] == ["report-a-newer", "report-z-older"]
+    assert store.latest_report() == newer_report
 
 
 def test_build_report_paths_uses_date_type_and_run_id(tmp_path):
