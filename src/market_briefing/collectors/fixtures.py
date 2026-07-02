@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from market_briefing.collectors.base import CollectionResult
 from market_briefing.domain import (
@@ -16,8 +16,9 @@ from market_briefing.domain import (
 
 
 class FixtureCollector:
-    def __init__(self, fixture_path: Path):
+    def __init__(self, fixture_path: Path, clock: Callable[[], datetime] | None = None):
         self.fixture_path = fixture_path
+        self.clock = clock or _utc_now
 
     def collect(
         self,
@@ -29,7 +30,7 @@ class FixtureCollector:
     ) -> CollectionResult:
         payload = json.loads(self.fixture_path.read_text(encoding="utf-8"))
         enabled_module_set = set(enabled_modules)
-        fetched_at = datetime.now(timezone.utc)
+        fetched_at = self.clock()
         snapshots: list[RawSnapshot] = []
         facts: list[AtomicFact] = []
 
@@ -102,13 +103,27 @@ def _write_raw_snapshot(
 ) -> Path:
     module_dir = raw_dir / report_date / run_id
     module_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "json" if content_type == "application/json" else "html"
+    suffix = _raw_suffix(content_type)
     raw_path = module_dir / f"{source_index:03d}-{module}.{suffix}"
     raw_path.write_text(_render_raw_content(content, content_type), encoding="utf-8")
     return raw_path
 
 
+def _raw_suffix(content_type: str) -> str:
+    if content_type == "application/json":
+        return "json"
+    if content_type == "text/html":
+        return "html"
+    raise ValueError(f"Unsupported fixture content type: {content_type}")
+
+
 def _render_raw_content(content: Any, content_type: str) -> str:
     if content_type == "application/json":
         return json.dumps(content, ensure_ascii=False, indent=2)
-    return str(content)
+    if content_type == "text/html":
+        return str(content)
+    raise ValueError(f"Unsupported fixture content type: {content_type}")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)

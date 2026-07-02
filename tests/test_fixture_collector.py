@@ -1,8 +1,43 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.domain import FactClassification, ReportType, SourceType
+
+
+def test_fixture_collector_uses_injected_clock_for_fetched_at(tmp_path):
+    fetched_at = datetime(2026, 7, 2, 7, 30, tzinfo=timezone.utc)
+    collector = FixtureCollector(
+        Path("tests/fixtures/after_close_sources.json"),
+        clock=lambda: fetched_at,
+    )
+
+    first = collector.collect(
+        run_id="run-fixture-clock-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices", "policy_regulation", "risk_points"],
+        raw_dir=tmp_path / "first-raw",
+    )
+    second = collector.collect(
+        run_id="run-fixture-clock-002",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices", "policy_regulation", "risk_points"],
+        raw_dir=tmp_path / "second-raw",
+    )
+
+    assert {snapshot.fetched_at for snapshot in first.snapshots} == {fetched_at}
+    assert {fact.fetched_at for fact in first.facts} == {fetched_at}
+    assert [snapshot.fetched_at for snapshot in first.snapshots] == [
+        snapshot.fetched_at for snapshot in second.snapshots
+    ]
+    assert [fact.fetched_at for fact in first.facts] == [
+        fact.fetched_at for fact in second.facts
+    ]
 
 
 def test_fixture_collector_writes_raw_snapshots_and_facts(tmp_path):
@@ -165,3 +200,38 @@ def test_fixture_collector_keeps_raw_paths_unique_for_same_module_sources(tmp_pa
         str(raw_paths[0]),
         str(raw_paths[1]),
     ]
+
+
+def test_fixture_collector_rejects_unsupported_content_type(tmp_path):
+    fixture_path = tmp_path / "unsupported_content_type_sources.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "report_date": "2026-07-02",
+                "report_type": "after_close",
+                "sources": [
+                    {
+                        "module": "market_indices",
+                        "source_name": "Fixture Unsupported Source",
+                        "source_url": "fixture://market/unsupported",
+                        "source_type": "other",
+                        "published_at": "2026-07-02T15:05:00+08:00",
+                        "content_type": "text/plain",
+                        "content": "plain text is not a supported raw fixture type",
+                        "facts": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    collector = FixtureCollector(fixture_path)
+
+    with pytest.raises(ValueError, match="Unsupported fixture content type: text/plain"):
+        collector.collect(
+            run_id="run-fixture-unsupported",
+            report_date="2026-07-02",
+            report_type=ReportType.AFTER_CLOSE,
+            enabled_modules=["market_indices"],
+            raw_dir=tmp_path / "raw",
+        )
