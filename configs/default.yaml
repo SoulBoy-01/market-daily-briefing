@@ -1,0 +1,27 @@
+app:
+  database_path: data/market_briefing.sqlite
+  raw_dir: data/raw
+  reports_dir: reports
+  default_report_date_timezone: Asia/Shanghai
+
+generation:
+  provider: template
+  openai_compatible:
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    model_env: OPENAI_MODEL
+
+report_types:
+  after_close:
+    modules:
+      market_indices: true
+      market_temperature: true
+      sector_moves: true
+      policy_regulation: true
+      major_news: true
+      risk_points: true
+  pre_open_update:
+    modules:
+      overnight_context: true
+      policy_news_delta: true
+      today_watchpoints: true
