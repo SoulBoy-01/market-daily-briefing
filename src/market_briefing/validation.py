@@ -41,9 +41,9 @@ def validate_report_sections(
             if fact_id not in fact_ids:
                 errors.append(f"section {section.section_id} cites missing fact_id {fact_id}")
 
-        normalized_body = section.body.casefold()
+        normalized_text = f"{section.title}\n{section.body}".casefold()
         for phrase in BANNED_PHRASES:
-            if phrase.casefold() in normalized_body:
+            if phrase.casefold() in normalized_text:
                 errors.append(f"section {section.section_id} contains banned phrase {phrase}")
 
     return ValidationResult(ok=not errors, errors=errors)

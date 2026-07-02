@@ -103,6 +103,24 @@ def test_validation_rejects_banned_investment_advice_language():
     assert "section risk_points contains banned phrase 建议买入" in result.errors
 
 
+def test_validation_rejects_banned_investment_advice_language_in_title():
+    facts = [_fact("fact-001", "上证指数收涨。")]
+    sections = [
+        ReportSection(
+            "risk_points",
+            "目标价风险提示",
+            "正文只引用已有事实。[fact-001]",
+            ["fact-001"],
+            "ok",
+        )
+    ]
+
+    result = validate_report_sections(sections, facts)
+
+    assert result.ok is False
+    assert "section risk_points contains banned phrase 目标价" in result.errors
+
+
 def test_validation_rejects_english_position_advice_language():
     facts = [_fact("fact-001", "The Shanghai Composite closed higher.")]
     sections = [

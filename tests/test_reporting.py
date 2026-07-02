@@ -9,6 +9,7 @@ def _fact(
     module: str,
     claim: str,
     classification: FactClassification = FactClassification.FACT,
+    used_in_sections: list[str] | None = None,
 ) -> AtomicFact:
     now = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
     return AtomicFact(
@@ -29,7 +30,7 @@ def _fact(
         derived_from_fact_ids=["fact-001"]
         if classification == FactClassification.INFERENCE
         else [],
-        used_in_sections=[module],
+        used_in_sections=[module] if used_in_sections is None else used_in_sections,
     )
 
 
@@ -80,6 +81,58 @@ def test_build_report_renders_all_fact_classification_labels():
     assert "**观点**" in body
     assert "**推测/归纳**" in body
     assert "**待确认**" in body
+
+
+def test_build_report_falls_back_to_module_when_used_in_sections_is_empty():
+    facts = [_fact("fact-001", "market_indices", "上证指数收涨。", used_in_sections=[])]
+
+    report = build_report(
+        report_id="report-001",
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        facts=facts,
+        markdown_path="reports/briefing.md",
+        html_path="reports/briefing.html",
+        fact_ledger_path="reports/fact_ledger.json",
+    )
+
+    assert [section.section_id for section in report.sections] == ["market_indices"]
+    assert report.sections[0].fact_ids == ("fact-001",)
+
+
+def test_build_report_uses_pre_open_update_title():
+    report = build_report(
+        report_id="report-001",
+        run_id="run-001",
+        report_date="2026-07-03",
+        report_type=ReportType.PRE_OPEN_UPDATE,
+        facts=[],
+        markdown_path="reports/briefing.md",
+        html_path="reports/briefing.html",
+        fact_ledger_path="reports/fact_ledger.json",
+    )
+
+    assert report.title == "A股早盘补充 2026-07-03"
+
+
+def test_render_html_escapes_raw_html_in_fact_claims():
+    facts = [_fact("fact-001", "market_indices", "<script>alert(1)</script>")]
+    report = build_report(
+        report_id="report-001",
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        facts=facts,
+        markdown_path="reports/briefing.md",
+        html_path="reports/briefing.html",
+        fact_ledger_path="reports/fact_ledger.json",
+    )
+
+    html = render_html(render_markdown(report, facts))
+
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
 def test_render_markdown_and_html_include_sources_and_fact_ids():

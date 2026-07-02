@@ -89,7 +89,7 @@ def render_markdown(report: Report, facts: list[AtomicFact]) -> str:
 
 
 def render_html(markdown: str) -> str:
-    body = MarkdownIt("commonmark").render(markdown)
+    body = MarkdownIt("commonmark", {"html": False}).render(markdown)
     return (
         '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
         "<title>Market Briefing</title></head><body>"
