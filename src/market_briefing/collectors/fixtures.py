@@ -42,6 +42,7 @@ class FixtureCollector:
                 raw_dir=raw_dir,
                 report_date=report_date,
                 run_id=run_id,
+                source_index=index,
                 module=module,
                 content=source["content"],
                 content_type=source["content_type"],
@@ -94,6 +95,7 @@ def _write_raw_snapshot(
     raw_dir: Path,
     report_date: str,
     run_id: str,
+    source_index: int,
     module: str,
     content: Any,
     content_type: str,
@@ -101,7 +103,7 @@ def _write_raw_snapshot(
     module_dir = raw_dir / report_date / run_id
     module_dir.mkdir(parents=True, exist_ok=True)
     suffix = "json" if content_type == "application/json" else "html"
-    raw_path = module_dir / f"{module}.{suffix}"
+    raw_path = module_dir / f"{source_index:03d}-{module}.{suffix}"
     raw_path.write_text(_render_raw_content(content, content_type), encoding="utf-8")
     return raw_path
 
