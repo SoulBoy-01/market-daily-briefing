@@ -129,14 +129,14 @@ def test_feedback_entry_summarizes_tags_and_note():
         section_id="risk_points",
         score=4,
         tags=tags,
-        note="风险点要更明确引用事实。",
+        note="Risk points should cite facts more clearly.",
         created_at=datetime(2026, 7, 2, 16, 30, tzinfo=timezone.utc),
     )
     tags.append("too_long")
 
     assert (
         entry.summary_line()
-        == "risk_points: score=4; tags=insufficient_risk,unclear_citation; note=风险点要更明确引用事实。"
+        == "risk_points: score=4; tags=insufficient_risk,unclear_citation; note=Risk points should cite facts more clearly."
     )
     assert entry.tags == ("insufficient_risk", "unclear_citation")
     with pytest.raises(AttributeError):
