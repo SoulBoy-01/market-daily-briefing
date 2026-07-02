@@ -1,0 +1,127 @@
+from datetime import datetime, timezone
+
+import pytest
+
+from market_briefing.domain import (
+    AtomicFact,
+    FactClassification,
+    RawSnapshot,
+    Report,
+    ReportSection,
+    ReportType,
+    Run,
+    SourceType,
+)
+from market_briefing.storage import BriefingStore, build_report_paths
+
+
+def test_store_initializes_schema_and_round_trips_run(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+
+    store.save_run(run)
+    loaded = store.get_run("run-001")
+
+    assert loaded is not None
+    assert loaded.run_id == "run-001"
+    assert loaded.report_type == ReportType.AFTER_CLOSE
+    assert loaded.enabled_modules == ("market_indices",)
+
+
+def test_store_round_trips_snapshot_fact_and_report(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    fetched_at = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-001",
+        run_id="run-001",
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://indices",
+        source_type=SourceType.DATA_API,
+        fetched_at=fetched_at,
+        content_type="application/json",
+        raw_path="data/raw/2026-07-02/run-001/indices.json",
+        metadata={"rows": 4, "symbols": ["000001.SH"]},
+    )
+    fact = AtomicFact(
+        fact_id="fact-001",
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        module="market_indices",
+        claim="Shanghai Composite closed higher.",
+        classification=FactClassification.FACT,
+        source_name="Fixture",
+        source_url="fixture://indices",
+        source_type=SourceType.DATA_API,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path=snapshot.raw_path,
+        derived_from_fact_ids=["source-fact-001"],
+        used_in_sections=["market_indices"],
+    )
+    report = Report(
+        report_id="report-001",
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="After-close briefing",
+        sections=[
+            ReportSection(
+                "market_indices",
+                "Index performance",
+                "Shanghai Composite closed higher. [fact-001]",
+                ["fact-001"],
+                "ok",
+            )
+        ],
+        markdown_path="reports/2026-07-02/after_close/briefing.md",
+        html_path="reports/2026-07-02/after_close/briefing.html",
+        fact_ledger_path="reports/2026-07-02/after_close/fact_ledger.json",
+    )
+
+    store.save_snapshot(snapshot)
+    store.save_facts([fact])
+    store.save_report(report)
+
+    loaded_snapshot = store.list_snapshots("run-001")[0]
+    loaded_fact = store.list_facts("run-001")[0]
+    loaded_report = store.get_report("report-001")
+
+    assert loaded_snapshot.snapshot_id == "snapshot-001"
+    assert loaded_snapshot.metadata["symbols"] == ("000001.SH",)
+    assert loaded_fact.fact_id == "fact-001"
+    assert loaded_fact.derived_from_fact_ids == ("source-fact-001",)
+    assert loaded_fact.used_in_sections == ("market_indices",)
+    assert loaded_report.title == "After-close briefing"
+    assert loaded_report.sections[0].fact_ids == ("fact-001",)
+
+
+def test_get_report_raises_key_error_for_unknown_report(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+
+    with pytest.raises(KeyError):
+        store.get_report("missing-report")
+
+
+def test_build_report_paths_uses_date_type_and_run_id(tmp_path):
+    paths = build_report_paths(
+        reports_dir=tmp_path / "reports",
+        report_date="2026-07-02",
+        report_type=ReportType.PRE_OPEN_UPDATE,
+        run_id="run-abc",
+    )
+
+    assert paths.report_dir == tmp_path / "reports" / "2026-07-02" / "pre_open_update" / "run-abc"
+    assert paths.markdown_path == paths.report_dir / "briefing.md"
+    assert paths.html_path == paths.report_dir / "briefing.html"
+    assert paths.fact_ledger_path == paths.report_dir / "fact_ledger.json"
