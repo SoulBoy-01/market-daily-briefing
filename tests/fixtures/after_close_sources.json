@@ -1,0 +1,73 @@
+{
+  "report_date": "2026-07-02",
+  "report_type": "after_close",
+  "sources": [
+    {
+      "module": "market_indices",
+      "source_name": "Fixture Market Data",
+      "source_url": "fixture://market/indices",
+      "source_type": "data_api",
+      "published_at": "2026-07-02T15:05:00+08:00",
+      "content_type": "application/json",
+      "content": {
+        "indices": [
+          {"name": "Shanghai Composite", "change_pct": 0.52, "close": 3021.45},
+          {"name": "Shenzhen Component", "change_pct": 0.31, "close": 9450.12}
+        ]
+      },
+      "facts": [
+        {
+          "fact_id": "fact-market-001",
+          "claim": "Shanghai Composite closed at 3021.45, up 0.52%.",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["market_indices"]
+        },
+        {
+          "fact_id": "fact-market-002",
+          "claim": "Shenzhen Component closed at 9450.12, up 0.31%.",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["market_indices"]
+        }
+      ]
+    },
+    {
+      "module": "policy_regulation",
+      "source_name": "Fixture Official Source",
+      "source_url": "fixture://official/policy",
+      "source_type": "official",
+      "published_at": "2026-07-02T16:00:00+08:00",
+      "content_type": "text/html",
+      "content": "<article><h1>Regulatory update</h1><p>The exchange published a market supervision bulletin.</p></article>",
+      "facts": [
+        {
+          "fact_id": "fact-policy-001",
+          "claim": "The exchange published a market supervision bulletin.",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["policy_regulation"]
+        }
+      ]
+    },
+    {
+      "module": "risk_points",
+      "source_name": "System Inference",
+      "source_url": "fixture://system/risk",
+      "source_type": "other",
+      "published_at": "2026-07-02T16:20:00+08:00",
+      "content_type": "application/json",
+      "content": {"basis": ["fact-market-001", "fact-policy-001"]},
+      "facts": [
+        {
+          "fact_id": "fact-risk-001",
+          "claim": "Market risk monitoring should track both index volatility and regulatory updates.",
+          "classification": "inference",
+          "confidence": "medium",
+          "derived_from_fact_ids": ["fact-market-001", "fact-policy-001"],
+          "used_in_sections": ["risk_points"]
+        }
+      ]
+    }
+  ]
+}

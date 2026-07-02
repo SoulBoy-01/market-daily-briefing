@@ -1,0 +1,43 @@
+{
+  "report_date": "2026-07-03",
+  "report_type": "pre_open_update",
+  "sources": [
+    {
+      "module": "overnight_context",
+      "source_name": "Fixture Overnight Data",
+      "source_url": "fixture://overnight/global",
+      "source_type": "data_api",
+      "published_at": "2026-07-03T07:20:00+08:00",
+      "content_type": "application/json",
+      "content": {"external_context": "Overnight global market volatility increased."},
+      "facts": [
+        {
+          "fact_id": "fact-overnight-001",
+          "claim": "Overnight global market volatility increased.",
+          "classification": "fact",
+          "confidence": "medium",
+          "used_in_sections": ["overnight_context"]
+        }
+      ]
+    },
+    {
+      "module": "today_watchpoints",
+      "source_name": "System Inference",
+      "source_url": "fixture://system/watchpoints",
+      "source_type": "other",
+      "published_at": "2026-07-03T08:00:00+08:00",
+      "content_type": "application/json",
+      "content": {"basis": ["fact-overnight-001"]},
+      "facts": [
+        {
+          "fact_id": "fact-watch-001",
+          "claim": "Today should watch the effect of global volatility on risk appetite.",
+          "classification": "inference",
+          "confidence": "medium",
+          "derived_from_fact_ids": ["fact-overnight-001"],
+          "used_in_sections": ["today_watchpoints"]
+        }
+      ]
+    }
+  ]
+}
