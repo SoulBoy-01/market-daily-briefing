@@ -318,6 +318,19 @@ class BriefingStore:
             fact_ledger_path=row["fact_ledger_path"],
         )
 
+    def list_reports(self) -> list[Report]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "select report_id from reports order by report_date desc, report_id desc"
+            ).fetchall()
+        return [self.get_report(row["report_id"]) for row in rows]
+
+    def latest_report(self) -> Report | None:
+        reports = self.list_reports()
+        if not reports:
+            return None
+        return reports[0]
+
     def save_feedback(self, entry: FeedbackEntry) -> None:
         with self.connection() as connection:
             connection.execute(

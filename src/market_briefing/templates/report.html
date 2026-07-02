@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}{{ report.title }}{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">{{ report.report_type.value }} / {{ report.run_id }}</p>
+    <h1>{{ report.title }}</h1>
+  </div>
+  <a class="button secondary" href="/">Back</a>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Sections</h2>
+  </div>
+  <div class="section-list">
+    {% for section in report.sections %}
+      <article class="section-block" id="{{ section.section_id }}">
+        <div class="section-title-row">
+          <h3>{{ section.title }}</h3>
+          <span class="status">{{ section.status }}</span>
+        </div>
+        <pre class="section-body">{{ section.body }}</pre>
+        <div class="fact-chip-row">
+          {% for fact_id in section.fact_ids %}
+            <a class="fact-chip" href="#fact-{{ fact_id }}">{{ fact_id }}</a>
+          {% endfor %}
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Fact ledger</h2>
+    <span>{{ facts|length }} facts</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Fact ID</th>
+          <th>Claim</th>
+          <th>Classification</th>
+          <th>Source info</th>
+          <th>Raw snapshot</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for fact in facts %}
+          <tr id="fact-{{ fact.fact_id }}">
+            <td><code>{{ fact.fact_id }}</code></td>
+            <td>{{ fact.claim }}</td>
+            <td>{{ fact.classification.value }} / {{ fact.confidence }}</td>
+            <td>
+              <div>{{ fact.source_name }}</div>
+              <div class="muted">{{ fact.source_type.value }}</div>
+              <a href="{{ fact.source_url }}">{{ fact.source_url }}</a>
+              <div class="muted">published: {{ fact.published_at or "unknown" }}</div>
+            </td>
+            <td><code>{{ fact.raw_snapshot_path }}</code></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Raw snapshots</h2>
+    <span>{{ snapshots|length }} snapshots</span>
+  </div>
+  <div class="snapshot-list">
+    {% for item in snapshots %}
+      <details class="snapshot" open>
+        <summary>
+          {{ item.snapshot.module }} / {{ item.snapshot.source_name }}
+          <span>{{ item.snapshot.content_type }}</span>
+        </summary>
+        <dl class="metrics compact">
+          <div>
+            <dt>Snapshot ID</dt>
+            <dd>{{ item.snapshot.snapshot_id }}</dd>
+          </div>
+          <div>
+            <dt>Source URL</dt>
+            <dd>{{ item.snapshot.source_url }}</dd>
+          </div>
+          <div>
+            <dt>Raw path</dt>
+            <dd>{{ item.snapshot.raw_path }}</dd>
+          </div>
+        </dl>
+        <pre class="raw-content">{{ item.content }}</pre>
+      </details>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="grid two-column">
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Section feedback</h2>
+    </div>
+    <form class="stacked-form" method="post" action="/reports/{{ report.report_id }}/feedback">
+      <label>
+        Section
+        <select name="section_id" required>
+          {% for section in report.sections %}
+            <option value="{{ section.section_id }}">{{ section.title }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Score
+        <input name="score" type="number" min="1" max="5" value="4" required>
+      </label>
+      <fieldset class="checkbox-group">
+        <legend>Tags</legend>
+        {% for tag in feedback_tags %}
+          <label>
+            <input type="checkbox" name="tags" value="{{ tag }}">
+            {{ tag }}
+          </label>
+        {% endfor %}
+      </fieldset>
+      <label>
+        Note
+        <textarea name="note" rows="4" maxlength="240"></textarea>
+      </label>
+      <button type="submit">Save feedback</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Feedback history</h2>
+    </div>
+    <pre class="summary">{{ feedback_summary }}</pre>
+    {% if feedback %}
+      <ul class="feedback-list">
+        {% for entry in feedback %}
+          <li>
+            <div>
+              <strong>{{ entry.section_id }}</strong>
+              <span>score {{ entry.score }}</span>
+            </div>
+            <div class="muted">{{ entry.tags|join(", ") }}</div>
+            <p>{{ entry.note }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No feedback submitted for this report.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

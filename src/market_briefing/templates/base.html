@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Loop Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Loop Dashboard</a>
+    <nav class="nav">
+      <a href="/">Dashboard</a>
+      <a href="/runs/fixture">Fixture run</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Fixture run{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Pipeline fixture</p>
+    <h1>Fixture run</h1>
+  </div>
+</section>
+
+<section class="panel narrow">
+  <form class="stacked-form" method="post" action="/runs/fixture">
+    <label>
+      Run ID
+      <input name="run_id" value="web-after-close-001" required>
+    </label>
+    <label>
+      Report date
+      <input name="report_date" type="date" value="2026-07-02" required>
+    </label>
+    <label>
+      Report type
+      <select name="report_type" required>
+        {% for report_type in report_types %}
+          <option value="{{ report_type.value }}">{{ report_type.value }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Fixture path
+      <input name="fixture_path" value="tests/fixtures/after_close_sources.json" required>
+    </label>
+    <button type="submit">Run fixture</button>
+  </form>
+</section>
+{% endblock %}

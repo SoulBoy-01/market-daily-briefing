@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Loop Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Local briefing loop</p>
+    <h1>Loop Dashboard</h1>
+  </div>
+  {% if latest_report %}
+    <a class="button" href="/reports/{{ latest_report.report_id }}">Open latest</a>
+  {% endif %}
+</section>
+
+<section class="grid two-column">
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Fixture run</h2>
+    </div>
+    <form class="stacked-form" method="post" action="/runs/fixture">
+      <label>
+        Run ID
+        <input name="run_id" value="web-after-close-001" required>
+      </label>
+      <label>
+        Report date
+        <input name="report_date" type="date" value="2026-07-02" required>
+      </label>
+      <label>
+        Report type
+        <select name="report_type" required>
+          {% for report_type in report_types %}
+            <option value="{{ report_type.value }}">{{ report_type.value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Fixture path
+        <input name="fixture_path" value="tests/fixtures/after_close_sources.json" required>
+      </label>
+      <button type="submit">Run fixture</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Latest report</h2>
+    </div>
+    {% if latest_report %}
+      <dl class="metrics">
+        <div>
+          <dt>Title</dt>
+          <dd>{{ latest_report.title }}</dd>
+        </div>
+        <div>
+          <dt>Report ID</dt>
+          <dd>{{ latest_report.report_id }}</dd>
+        </div>
+        <div>
+          <dt>Run ID</dt>
+          <dd>{{ latest_report.run_id }}</dd>
+        </div>
+        <div>
+          <dt>Sections</dt>
+          <dd>{{ latest_report.sections|length }}</dd>
+        </div>
+      </dl>
+    {% else %}
+      <p class="muted">No reports have been generated yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Fact ledger</h2>
+  </div>
+  {% if latest_facts %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Fact ID</th>
+            <th>Claim</th>
+            <th>Source</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for fact in latest_facts %}
+            <tr>
+              <td><code>{{ fact.fact_id }}</code></td>
+              <td>{{ fact.claim }}</td>
+              <td>{{ fact.source_name }}</td>
+              <td>{{ fact.confidence }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">Fact rows appear after the first run.</p>
+  {% endif %}
+</section>
+
+<section class="grid two-column">
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Reports</h2>
+    </div>
+    {% if reports %}
+      <ul class="link-list">
+        {% for report in reports %}
+          <li>
+            <a href="/reports/{{ report.report_id }}">{{ report.title }}</a>
+            <span>{{ report.report_type.value }} / {{ report.run_id }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No report history yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>Section feedback</h2>
+    </div>
+    <pre class="summary">{{ feedback_summary }}</pre>
+  </div>
+</section>
+{% endblock %}
