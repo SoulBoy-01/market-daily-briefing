@@ -8,8 +8,38 @@ from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.domain import FactClassification, ReportType, SourceType
 
 
+def test_fixture_collector_defaults_fetched_at_to_report_date_midnight(tmp_path):
+    collector = FixtureCollector(Path("tests/fixtures/after_close_sources.json"))
+
+    first = collector.collect(
+        run_id="run-fixture-default-clock",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices", "policy_regulation", "risk_points"],
+        raw_dir=tmp_path / "raw",
+    )
+    second = collector.collect(
+        run_id="run-fixture-default-clock",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices", "policy_regulation", "risk_points"],
+        raw_dir=tmp_path / "raw",
+    )
+    expected_fetched_at = datetime.fromisoformat("2026-07-02T00:00:00+00:00")
+
+    assert {snapshot.fetched_at for snapshot in first.snapshots} == {expected_fetched_at}
+    assert {fact.fetched_at for fact in first.facts} == {expected_fetched_at}
+    assert [snapshot.fetched_at for snapshot in first.snapshots] == [
+        snapshot.fetched_at for snapshot in second.snapshots
+    ]
+    assert [fact.fetched_at for fact in first.facts] == [
+        fact.fetched_at for fact in second.facts
+    ]
+
+
 def test_fixture_collector_uses_injected_clock_for_fetched_at(tmp_path):
     fetched_at = datetime(2026, 7, 2, 7, 30, tzinfo=timezone.utc)
+    default_fetched_at = datetime.fromisoformat("2026-07-02T00:00:00+00:00")
     collector = FixtureCollector(
         Path("tests/fixtures/after_close_sources.json"),
         clock=lambda: fetched_at,
@@ -30,6 +60,7 @@ def test_fixture_collector_uses_injected_clock_for_fetched_at(tmp_path):
         raw_dir=tmp_path / "second-raw",
     )
 
+    assert fetched_at != default_fetched_at
     assert {snapshot.fetched_at for snapshot in first.snapshots} == {fetched_at}
     assert {fact.fetched_at for fact in first.facts} == {fetched_at}
     assert [snapshot.fetched_at for snapshot in first.snapshots] == [

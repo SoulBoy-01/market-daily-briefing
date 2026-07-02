@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,7 +18,7 @@ from market_briefing.domain import (
 class FixtureCollector:
     def __init__(self, fixture_path: Path, clock: Callable[[], datetime] | None = None):
         self.fixture_path = fixture_path
-        self.clock = clock or _utc_now
+        self.clock = clock
 
     def collect(
         self,
@@ -30,7 +30,7 @@ class FixtureCollector:
     ) -> CollectionResult:
         payload = json.loads(self.fixture_path.read_text(encoding="utf-8"))
         enabled_module_set = set(enabled_modules)
-        fetched_at = self.clock()
+        fetched_at = self.clock() if self.clock else _default_fetched_at(report_date)
         snapshots: list[RawSnapshot] = []
         facts: list[AtomicFact] = []
 
@@ -125,5 +125,5 @@ def _render_raw_content(content: Any, content_type: str) -> str:
     raise ValueError(f"Unsupported fixture content type: {content_type}")
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+def _default_fetched_at(report_date: str) -> datetime:
+    return datetime.fromisoformat(f"{report_date}T00:00:00+00:00")
