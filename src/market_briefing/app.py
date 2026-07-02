@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 from typing import Annotated
 from urllib.parse import urlparse
@@ -32,13 +33,14 @@ def default_config_path() -> Path:
 
 
 def create_app(config: AppConfig | None = None, store: BriefingStore | None = None) -> FastAPI:
-    app_config = config or load_config(default_config_path())
+    app_config = config or load_default_app_config()
     briefing_store = store or BriefingStore(app_config.database_path)
     briefing_store.initialize()
 
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     templates.env.filters["safe_source_url"] = safe_source_url
     app = FastAPI(title="Market Briefing Loop Dashboard")
+    app.state.config = app_config
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.get("/")
@@ -195,21 +197,31 @@ def _validate_report_date(report_date: str) -> None:
 
 def _validate_fixture_path(fixture_path: str) -> Path:
     path = Path(fixture_path)
-    if path.is_absolute() or ".." in path.parts:
+    windows_path = PureWindowsPath(fixture_path)
+    if (
+        path.is_absolute()
+        or windows_path.drive
+        or windows_path.root
+        or ".." in path.parts
+        or ".." in windows_path.parts
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="fixture_path must be a relative path without traversal",
         )
 
-    candidates = [path, PROJECT_ROOT / path]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
+    project_root = PROJECT_ROOT.resolve()
+    candidate = (project_root / path).resolve()
+    if not candidate.is_relative_to(project_root):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fixture_path must stay under the project root",
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="fixture_path does not exist",
-    )
+    if candidate.is_file():
+        return candidate
+
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fixture_path does not exist")
 
 
 def safe_source_url(source_url: str) -> str | None:
@@ -217,6 +229,24 @@ def safe_source_url(source_url: str) -> str | None:
     if parsed.scheme.lower() in SAFE_SOURCE_SCHEMES:
         return source_url.strip()
     return None
+
+
+def load_default_app_config() -> AppConfig:
+    config_path = default_config_path()
+    config = load_config(config_path)
+    project_root = config_path.parent.parent.resolve()
+    return replace(
+        config,
+        database_path=_resolve_default_config_path(config.database_path, project_root),
+        raw_dir=_resolve_default_config_path(config.raw_dir, project_root),
+        reports_dir=_resolve_default_config_path(config.reports_dir, project_root),
+    )
+
+
+def _resolve_default_config_path(path: Path, project_root: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return (project_root / path).resolve()
 
 
 app = create_app()

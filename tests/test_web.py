@@ -137,12 +137,36 @@ def test_dashboard_rejects_unsafe_fixture_run_inputs(tmp_path):
             "report_type": "after_close",
             "fixture_path": str(Path("tests/fixtures/after_close_sources.json").resolve()),
         },
+        {
+            "run_id": "safe-run",
+            "report_date": "2026-07-02",
+            "report_type": "after_close",
+            "fixture_path": "\\Windows\\win.ini",
+        },
+        {
+            "run_id": "safe-run",
+            "report_date": "2026-07-02",
+            "report_type": "after_close",
+            "fixture_path": "C:foo",
+        },
     ]
 
     for payload in unsafe_requests:
         response = client.post("/runs/fixture", data=payload, follow_redirects=False)
 
         assert response.status_code == 400
+
+
+def test_default_app_normalizes_default_paths_under_project_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    project_root = default_config_path().parent.parent
+
+    default_app = create_app()
+    config = default_app.state.config
+
+    for path in (config.database_path, config.raw_dir, config.reports_dir):
+        assert path.is_absolute()
+        assert path.is_relative_to(project_root)
 
 
 def test_dashboard_can_submit_feedback(tmp_path):
