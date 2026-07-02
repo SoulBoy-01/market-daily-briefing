@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
+
+
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_value(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_value(item) for item in value)
+    return value
+
+
+def _to_record_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _to_record_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_to_record_value(item) for item in value]
+    return value
 
 
 class ReportType(StrEnum):
@@ -45,7 +63,10 @@ class RawSnapshot:
     fetched_at: datetime
     content_type: str
     raw_path: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", _freeze_value(self.metadata))
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -58,7 +79,7 @@ class RawSnapshot:
             "fetched_at": self.fetched_at.isoformat(),
             "content_type": self.content_type,
             "raw_path": self.raw_path,
-            "metadata": self.metadata,
+            "metadata": _to_record_value(self.metadata),
         }
 
 
@@ -78,8 +99,12 @@ class AtomicFact:
     fetched_at: datetime
     confidence: str
     raw_snapshot_path: str
-    derived_from_fact_ids: list[str] = field(default_factory=list)
-    used_in_sections: list[str] = field(default_factory=list)
+    derived_from_fact_ids: tuple[str, ...] = field(default_factory=tuple)
+    used_in_sections: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "derived_from_fact_ids", tuple(self.derived_from_fact_ids))
+        object.__setattr__(self, "used_in_sections", tuple(self.used_in_sections))
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -107,8 +132,11 @@ class ReportSection:
     section_id: str
     title: str
     body: str
-    fact_ids: list[str]
+    fact_ids: tuple[str, ...]
     status: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fact_ids", tuple(self.fact_ids))
 
 
 @dataclass(frozen=True)
@@ -118,10 +146,13 @@ class Report:
     report_date: str
     report_type: ReportType
     title: str
-    sections: list[ReportSection]
+    sections: tuple[ReportSection, ...]
     markdown_path: str
     html_path: str
     fact_ledger_path: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "sections", tuple(self.sections))
 
     def all_fact_ids(self) -> set[str]:
         return {fact_id for section in self.sections for fact_id in section.fact_ids}
@@ -133,9 +164,12 @@ class FeedbackEntry:
     report_id: str
     section_id: str
     score: int
-    tags: list[str]
+    tags: tuple[str, ...]
     note: str
     created_at: datetime
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tags", tuple(self.tags))
 
     def summary_line(self) -> str:
         tag_text = ",".join(self.tags)
@@ -147,13 +181,16 @@ class Run:
     run_id: str
     report_date: str
     report_type: ReportType
-    enabled_modules: list[str]
+    enabled_modules: tuple[str, ...]
     status: RunStatus
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
     warning_count: int = 0
     error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled_modules", tuple(self.enabled_modules))
 
     @classmethod
     def create(
@@ -167,7 +204,7 @@ class Run:
             run_id=run_id,
             report_date=report_date,
             report_type=report_type,
-            enabled_modules=enabled_modules,
+            enabled_modules=tuple(enabled_modules),
             status=RunStatus.CREATED,
             created_at=datetime.now(timezone.utc),
         )
