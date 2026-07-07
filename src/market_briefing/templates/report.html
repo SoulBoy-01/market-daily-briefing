@@ -5,29 +5,51 @@
 {% block content %}
 <section class="page-header">
   <div>
-    <p class="eyebrow">{{ report.report_type.value }} / {{ report.run_id }}</p>
+    <p class="eyebrow">{{ report.report_type|report_type_label }} / {{ report.run_id }}</p>
     <h1>{{ report.title }}</h1>
   </div>
-  <a class="button secondary" href="/">Back</a>
+  <a class="button secondary" href="/">返回工作台</a>
 </section>
 
 <section class="panel">
   <div class="panel-heading">
-    <h2>Sections</h2>
+    <h2>简报章节</h2>
   </div>
   <div class="section-list">
     {% for section in report.sections %}
       <article class="section-block" id="{{ section.section_id }}">
         <div class="section-title-row">
           <h3>{{ section.title }}</h3>
-          <span class="status">{{ section.status }}</span>
+          <span class="status">{{ section.status|status_label }}</span>
         </div>
-        <pre class="section-body">{{ section.body }}</pre>
-        <div class="fact-chip-row">
-          {% for fact_id in section.fact_ids %}
-            <a class="fact-chip" href="#fact-{{ fact_id }}">{{ fact_id }}</a>
-          {% endfor %}
-        </div>
+        {% if section.fact_lines %}
+          <div class="section-body structured">
+            <ul class="fact-lines">
+              {% for line in section.fact_lines %}
+                {% set classification = line.classification.value %}
+                <li class="fact-line fact-line-{{ classification }}">
+                  <span class="cls-badge cls-{{ classification }}">{{ line.classification|fact_classification_label }}</span>
+                  <span class="fact-claim">
+                    {% if section.section_id in ["next_watchlist", "today_watchpoints"] %}<span class="watch-prefix">待验证：</span>{% endif %}{{ line.claim }}
+                  </span>
+                  {% if line.derived_from_fact_ids %}
+                    <span class="derived-from">据 {{ line.derived_from_fact_ids|join("、") }}</span>
+                  {% endif %}
+                  <a class="fact-id" href="#fact-{{ line.fact_id }}">{{ line.fact_id }}</a>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% else %}
+          <pre class="section-body">{{ section.body }}</pre>
+        {% endif %}
+        {% if section.fact_ids %}
+          <div class="fact-chip-row">
+            {% for fact_id in section.fact_ids %}
+              <a class="fact-chip" href="#fact-{{ fact_id }}">{{ fact_id }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </article>
     {% endfor %}
   </div>
@@ -35,18 +57,18 @@
 
 <section class="panel">
   <div class="panel-heading">
-    <h2>Fact ledger</h2>
-    <span>{{ facts|length }} facts</span>
+    <h2>事实账本</h2>
+    <span>{{ facts|length }} 条事实</span>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Fact ID</th>
-          <th>Claim</th>
-          <th>Classification</th>
-          <th>Source info</th>
-          <th>Raw snapshot</th>
+          <th>事实 ID</th>
+          <th>事实陈述</th>
+          <th>事实分类</th>
+          <th>来源信息</th>
+          <th>原始快照</th>
         </tr>
       </thead>
       <tbody>
@@ -54,17 +76,17 @@
           <tr id="fact-{{ fact.fact_id }}">
             <td><code>{{ fact.fact_id }}</code></td>
             <td>{{ fact.claim }}</td>
-            <td>{{ fact.classification.value }} / {{ fact.confidence }}</td>
+            <td>{{ fact.classification|fact_classification_label }} / 置信度：{{ fact.confidence|confidence_label }}</td>
             <td>
               <div>{{ fact.source_name }}</div>
-              <div class="muted">{{ fact.source_type.value }}</div>
+              <div class="muted">{{ fact.source_type|source_type_label }}</div>
               {% set source_href = fact.source_url|safe_source_url %}
               {% if source_href %}
                 <a href="{{ source_href }}">{{ fact.source_url }}</a>
               {% else %}
                 <span>{{ fact.source_url }}</span>
               {% endif %}
-              <div class="muted">published: {{ fact.published_at or "unknown" }}</div>
+              <div class="muted">发布时间：{{ fact.published_at or "未知" }}</div>
             </td>
             <td><code>{{ fact.raw_snapshot_path }}</code></td>
           </tr>
@@ -76,27 +98,27 @@
 
 <section class="panel">
   <div class="panel-heading">
-    <h2>Raw snapshots</h2>
-    <span>{{ snapshots|length }} snapshots</span>
+    <h2>原始快照</h2>
+    <span>{{ snapshots|length }} 份快照</span>
   </div>
   <div class="snapshot-list">
     {% for item in snapshots %}
       <details class="snapshot" open>
         <summary>
-          {{ item.snapshot.module }} / {{ item.snapshot.source_name }}
+          {{ item.snapshot.module|module_label }} / {{ item.snapshot.source_name }}
           <span>{{ item.snapshot.content_type }}</span>
         </summary>
         <dl class="metrics compact">
           <div>
-            <dt>Snapshot ID</dt>
+            <dt>快照 ID</dt>
             <dd>{{ item.snapshot.snapshot_id }}</dd>
           </div>
           <div>
-            <dt>Source URL</dt>
+            <dt>来源 URL</dt>
             <dd>{{ item.snapshot.source_url }}</dd>
           </div>
           <div>
-            <dt>Raw path</dt>
+            <dt>原始路径</dt>
             <dd>{{ item.snapshot.raw_path }}</dd>
           </div>
         </dl>
@@ -109,41 +131,50 @@
 <section class="grid two-column">
   <div class="panel">
     <div class="panel-heading">
-      <h2>Section feedback</h2>
+      <h2>分节反馈</h2>
     </div>
+    {% set selected_tags = feedback_form.get("tags", []) %}
     <form class="stacked-form" method="post" action="/reports/{{ report.report_id }}/feedback">
+      {% if feedback_errors %}
+        <div class="form-errors" role="alert">
+          {% for error in feedback_errors %}
+            <p>{{ error.message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
       <label>
-        Section
+        章节
         <select name="section_id" required>
           {% for section in report.sections %}
-            <option value="{{ section.section_id }}">{{ section.title }}</option>
+            <option value="{{ section.section_id }}" {% if feedback_form.get("section_id") == section.section_id %}selected{% endif %}>{{ section.title }}</option>
           {% endfor %}
         </select>
       </label>
       <label>
-        Score
-        <input name="score" type="number" min="1" max="5" value="4" required>
+        评分
+        <input name="score" type="number" min="1" max="5" value="{{ feedback_form.get('score', 4) }}" required>
+        <span class="muted">1=最差 · 5=最好</span>
       </label>
       <fieldset class="checkbox-group">
-        <legend>Tags</legend>
+        <legend>标签</legend>
         {% for tag in feedback_tags %}
           <label>
-            <input type="checkbox" name="tags" value="{{ tag }}">
-            {{ tag }}
+            <input type="checkbox" name="tags" value="{{ tag }}" {% if tag in selected_tags %}checked{% endif %}>
+            {{ tag|feedback_tag_label }}
           </label>
         {% endfor %}
       </fieldset>
       <label>
-        Note
-        <textarea name="note" rows="4" maxlength="240"></textarea>
+        备注
+        <textarea name="note" rows="4" maxlength="240">{{ feedback_form.get("note", "") }}</textarea>
       </label>
-      <button type="submit">Save feedback</button>
+      <button type="submit">保存反馈</button>
     </form>
   </div>
 
   <div class="panel">
     <div class="panel-heading">
-      <h2>Feedback history</h2>
+      <h2>反馈历史</h2>
     </div>
     <pre class="summary">{{ feedback_summary }}</pre>
     {% if feedback %}
@@ -151,17 +182,21 @@
         {% for entry in feedback %}
           <li>
             <div>
-              <strong>{{ entry.section_id }}</strong>
-              <span>score {{ entry.score }}</span>
+              <strong>{{ entry.section_id|section_label }}</strong>
+              <span>评分 {{ entry.score }}</span>
             </div>
-            <div class="muted">{{ entry.tags|join(", ") }}</div>
+            <div class="muted">{{ entry.tags|feedback_tags_label }}</div>
             <p>{{ entry.note }}</p>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No feedback submitted for this report.</p>
+      <p class="muted">这份简报还没有提交反馈。</p>
     {% endif %}
   </div>
 </section>
+
+<footer class="report-footer">
+  本简报基于 {{ facts|length }} 条原子事实生成。仅供研究，不构成任何投资建议。
+</footer>
 {% endblock %}

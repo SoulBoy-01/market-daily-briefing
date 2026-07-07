@@ -1,90 +1,145 @@
 {% extends "base.html" %}
 
-{% block title %}Loop Dashboard{% endblock %}
+{% block title %}每日市场简报工作台{% endblock %}
 
 {% block content %}
 <section class="page-header">
   <div>
-    <p class="eyebrow">Local briefing loop</p>
-    <h1>Loop Dashboard</h1>
+    <p class="eyebrow">本地简报循环</p>
+    <h1>每日市场简报工作台</h1>
   </div>
-  {% if latest_report %}
-    <a class="button" href="/reports/{{ latest_report.report_id }}">Open latest</a>
-  {% endif %}
+  <div class="header-actions">
+    <button class="button secondary" type="button" data-tour-open>重新查看引导</button>
+    {% if latest_report %}
+      <a class="button" href="/reports/{{ latest_report.report_id }}">打开最新简报</a>
+    {% endif %}
+  </div>
 </section>
 
 <section class="grid two-column">
   <div class="panel">
     <div class="panel-heading">
-      <h2>Fixture run</h2>
+      <h2>样例数据运行</h2>
     </div>
-    <form class="stacked-form" method="post" action="/runs/fixture">
+    <form id="run-fixture-form" class="stacked-form" method="post" action="/runs/fixture">
       <label>
-        Run ID
+        运行 ID
         <input name="run_id" value="web-after-close-001" required>
       </label>
       <label>
-        Report date
-        <input name="report_date" type="date" value="2026-07-02" required>
+        简报日期
+        <input name="report_date" type="date" value="{{ default_report_date }}" required>
       </label>
       <label>
-        Report type
+        简报类型
         <select name="report_type" required>
           {% for report_type in report_types %}
-            <option value="{{ report_type.value }}">{{ report_type.value }}</option>
+            <option value="{{ report_type.value }}">{{ report_type|report_type_label }}</option>
           {% endfor %}
         </select>
       </label>
       <label>
-        Fixture path
-        <input name="fixture_path" value="tests/fixtures/after_close_sources.json" required>
+        样例数据路径
+        <input name="fixture_path" value="tests/fixtures/after_close_review_sources_zh.json" required>
       </label>
-      <button type="submit">Run fixture</button>
+      <button type="submit">运行样例数据</button>
     </form>
   </div>
 
   <div class="panel">
     <div class="panel-heading">
-      <h2>Latest report</h2>
+      <h2>最新简报</h2>
     </div>
     {% if latest_report %}
       <dl class="metrics">
         <div>
-          <dt>Title</dt>
+          <dt>标题</dt>
           <dd>{{ latest_report.title }}</dd>
         </div>
         <div>
-          <dt>Report ID</dt>
+          <dt>报告 ID</dt>
           <dd>{{ latest_report.report_id }}</dd>
         </div>
         <div>
-          <dt>Run ID</dt>
+          <dt>运行 ID</dt>
           <dd>{{ latest_report.run_id }}</dd>
         </div>
         <div>
-          <dt>Sections</dt>
+          <dt>章节数</dt>
           <dd>{{ latest_report.sections|length }}</dd>
         </div>
       </dl>
     {% else %}
-      <p class="muted">No reports have been generated yet.</p>
+      <p class="muted">还没有生成简报。</p>
     {% endif %}
   </div>
 </section>
 
 <section class="panel">
   <div class="panel-heading">
-    <h2>Fact ledger</h2>
+    <h2>审阅样稿</h2>
+    {% if review_report %}
+      <span>{{ review_report.report_type|report_type_label }} / {{ review_report.run_id }}</span>
+    {% endif %}
+  </div>
+  {% if review_report %}
+    <div class="section-list">
+      {% for section in review_report.sections %}
+        <article class="section-block" id="review-{{ section.section_id }}">
+          <div class="section-title-row">
+            <h3>{{ section.title }}</h3>
+            <span class="status">{{ section.status|status_label }}</span>
+          </div>
+          {% if section.fact_lines %}
+            <div class="section-body structured">
+              <ul class="fact-lines">
+                {% for line in section.fact_lines %}
+                  {% set classification = line.classification.value %}
+                  <li class="fact-line fact-line-{{ classification }}">
+                    <span class="cls-badge cls-{{ classification }}">{{ line.classification|fact_classification_label }}</span>
+                    <span class="fact-claim">
+                      {% if section.section_id in ["next_watchlist", "today_watchpoints"] %}<span class="watch-prefix">待验证：</span>{% endif %}{{ line.claim }}
+                    </span>
+                    {% if line.derived_from_fact_ids %}
+                      <span class="derived-from">据 {{ line.derived_from_fact_ids|join("、") }}</span>
+                    {% endif %}
+                    <code class="fact-id">{{ line.fact_id }}</code>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% else %}
+            <pre class="section-body">{{ section.body }}</pre>
+          {% endif %}
+          {% if section.fact_ids %}
+            <div class="fact-chip-row">
+              {% for fact_id in section.fact_ids %}
+                <a class="fact-chip" href="/reports/{{ review_report.report_id }}#fact-{{ fact_id }}">{{ fact_id }}</a>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+    <a class="button secondary" href="/reports/{{ review_report.report_id }}">进入完整审阅页</a>
+  {% else %}
+    <p class="muted">还没有可审阅的简报。先运行一次样例数据。</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>事实账本</h2>
   </div>
   {% if latest_facts %}
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Fact ID</th>
-            <th>Claim</th>
-            <th>Source</th>
-            <th>Confidence</th>
+            <th>事实 ID</th>
+            <th>事实陈述</th>
+            <th>来源</th>
+            <th>置信度</th>
           </tr>
         </thead>
         <tbody>
@@ -93,41 +148,71 @@
               <td><code>{{ fact.fact_id }}</code></td>
               <td>{{ fact.claim }}</td>
               <td>{{ fact.source_name }}</td>
-              <td>{{ fact.confidence }}</td>
+              <td>{{ fact.confidence|confidence_label }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   {% else %}
-    <p class="muted">Fact rows appear after the first run.</p>
+    <p class="muted">首次运行后会显示事实行。</p>
   {% endif %}
 </section>
 
 <section class="grid two-column">
   <div class="panel">
     <div class="panel-heading">
-      <h2>Reports</h2>
+      <h2>简报历史</h2>
     </div>
     {% if reports %}
       <ul class="link-list">
         {% for report in reports %}
           <li>
             <a href="/reports/{{ report.report_id }}">{{ report.title }}</a>
-            <span>{{ report.report_type.value }} / {{ report.run_id }}</span>
+            <span>{{ report.report_type|report_type_label }} / {{ report.run_id }}</span>
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p class="muted">No report history yet.</p>
+      <p class="muted">暂无简报历史。</p>
     {% endif %}
   </div>
 
   <div class="panel">
     <div class="panel-heading">
-      <h2>Section feedback</h2>
+      <h2>分节反馈</h2>
     </div>
     <pre class="summary">{{ feedback_summary }}</pre>
   </div>
 </section>
+
+{% endblock %}
+
+{% block overlays %}
+<div id="onboarding-tour" class="tour-overlay" data-tour hidden>
+  <section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body">
+    <div class="tour-progress">
+      <span data-tour-counter>1/5</span>
+    </div>
+    <p class="eyebrow">新手阅读引导</p>
+    <h2 id="tour-title" data-tour-title>今日一句话结论</h2>
+    <p id="tour-body" data-tour-body>先看这里：它只放今天最重要的一两条事实，帮你快速进入状态。</p>
+    <div class="tour-actions">
+      <button class="button secondary" type="button" data-tour-skip>跳过引导</button>
+      <button class="button secondary" type="button" data-tour-prev>上一步</button>
+      <button class="button" type="button" data-tour-next>下一步</button>
+    </div>
+    <ol class="tour-steps" hidden>
+      {% if review_report %}
+        <li data-tour-step data-tour-target="review-one_sentence_conclusion" data-tour-title="今日一句话结论" data-tour-body="先看这里：它只放今天最重要的一两条事实，帮你快速进入状态。"></li>
+        <li data-tour-step data-tour-target="review-market_overview" data-tour-title="市场全貌" data-tour-body="这里看指数、市场温度和成交背景，用来判断今天的大方向。"></li>
+        <li data-tour-step data-tour-target="review-sector_strength" data-tour-title="强弱板块" data-tour-body="这里看哪些方向强、哪些方向弱，判断行情是局部活跃还是扩散。"></li>
+        <li data-tour-step data-tour-target="review-fact_opinion_inference" data-tour-title="事实 / 观点 / 推测分栏" data-tour-body="这里把已经发生的事、别人的判断、系统归纳分开，避免混在一起。"></li>
+        <li data-tour-step data-tour-target="review-next_watchlist" data-tour-title="下一轮观察清单" data-tour-body="最后看这里：它记录下一轮要继续验证的风险和线索。"></li>
+      {% else %}
+        <li data-tour-step data-tour-target="run-fixture-form" data-tour-title="先运行一次样例数据" data-tour-body="工作台还没有简报。先跑一次样例数据，之后就能看到完整审阅页。"></li>
+      {% endif %}
+    </ol>
+  </section>
+</div>
 {% endblock %}

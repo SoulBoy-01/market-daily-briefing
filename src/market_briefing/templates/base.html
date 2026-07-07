@@ -1,21 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Loop Dashboard{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  <title>{% block title %}每日市场简报工作台{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}?v=20260703-compliance1">
 </head>
 <body>
+  <div class="disclaimer-bar" role="note">
+    本简报仅供研究，不构成任何投资建议。所有数据来自公开来源，可能存在延迟或偏差。
+  </div>
   <header class="topbar">
-    <a class="brand" href="/">Loop Dashboard</a>
+    <a class="brand" href="/">每日市场简报</a>
     <nav class="nav">
-      <a href="/">Dashboard</a>
-      <a href="/runs/fixture">Fixture run</a>
+      <a href="/">工作台</a>
+      <a href="/runs/fixture">样例运行</a>
     </nav>
   </header>
   <main class="page">
     {% block content %}{% endblock %}
   </main>
+  {% block overlays %}{% endblock %}
+  <script src="{{ url_for('static', path='/tour.js') }}?v=20260703-compliance1" defer></script>
 </body>
 </html>

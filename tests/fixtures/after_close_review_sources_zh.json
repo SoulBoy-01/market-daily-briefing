@@ -1,0 +1,131 @@
+{
+  "report_date": "2026-07-02",
+  "report_type": "after_close",
+  "sources": [
+    {
+      "module": "market_indices",
+      "source_name": "样例行情数据",
+      "source_url": "fixture://market/indices-review-zh",
+      "source_type": "data_api",
+      "published_at": "2026-07-02T15:05:00+08:00",
+      "content_type": "application/json",
+      "content": {
+        "indices": [
+          {"name": "上证指数", "change_pct": 0.52, "close": 3021.45},
+          {"name": "深证成指", "change_pct": 0.31, "close": 9450.12},
+          {"name": "创业板指", "change_pct": -0.18, "close": 1788.36}
+        ],
+        "breadth": {"up": 2860, "down": 2215},
+        "turnover_billion_cny": 842.6
+      },
+      "facts": [
+        {
+          "fact_id": "fact-zh-market-001",
+          "claim": "上证指数收于3021.45点，上涨0.52%。",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["market_indices"]
+        },
+        {
+          "fact_id": "fact-zh-market-002",
+          "claim": "深证成指收于9450.12点，上涨0.31%。",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["market_indices"]
+        },
+        {
+          "fact_id": "fact-zh-market-003",
+          "claim": "创业板指收于1788.36点，下跌0.18%。",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["market_indices"]
+        }
+      ]
+    },
+    {
+      "module": "sector_moves",
+      "source_name": "样例板块数据",
+      "source_url": "fixture://market/sectors-review-zh",
+      "source_type": "data_api",
+      "published_at": "2026-07-02T15:10:00+08:00",
+      "content_type": "application/json",
+      "content": {
+        "leaders": ["机器人", "算力", "半导体设备"],
+        "laggards": ["地产链", "煤炭", "白酒"]
+      },
+      "facts": [
+        {
+          "fact_id": "fact-zh-sector-001",
+          "claim": "机器人、算力和半导体设备板块在样例数据中涨幅居前。",
+          "classification": "fact",
+          "confidence": "medium",
+          "used_in_sections": ["sector_moves"]
+        },
+        {
+          "fact_id": "fact-zh-sector-002",
+          "claim": "地产链、煤炭和白酒板块在样例数据中表现靠后。",
+          "classification": "fact",
+          "confidence": "medium",
+          "used_in_sections": ["sector_moves", "risk_points"]
+        }
+      ]
+    },
+    {
+      "module": "policy_regulation",
+      "source_name": "样例官方公告",
+      "source_url": "fixture://official/policy-review-zh",
+      "source_type": "official",
+      "published_at": "2026-07-02T16:00:00+08:00",
+      "content_type": "text/html",
+      "content": "<article><h1>市场监管动态</h1><p>交易所发布市场监管通报，强调异常交易监测和信息披露规范。</p></article>",
+      "facts": [
+        {
+          "fact_id": "fact-zh-policy-001",
+          "claim": "交易所发布市场监管通报，强调异常交易监测和信息披露规范。",
+          "classification": "fact",
+          "confidence": "high",
+          "used_in_sections": ["policy_regulation"]
+        }
+      ]
+    },
+    {
+      "module": "major_news",
+      "source_name": "样例市场新闻",
+      "source_url": "fixture://media/news-review-zh",
+      "source_type": "media",
+      "published_at": "2026-07-02T16:15:00+08:00",
+      "content_type": "text/html",
+      "content": "<article><h1>券商观点汇总</h1><p>多家券商认为，市场短线风险偏好有所修复，但成交额仍需持续观察。</p></article>",
+      "facts": [
+        {
+          "fact_id": "fact-zh-news-001",
+          "claim": "多家券商认为，市场短线风险偏好有所修复，但成交额仍需持续观察。",
+          "classification": "opinion",
+          "confidence": "medium",
+          "used_in_sections": ["major_news"]
+        }
+      ]
+    },
+    {
+      "module": "risk_points",
+      "source_name": "样例系统归纳",
+      "source_url": "fixture://system/risk-review-zh",
+      "source_type": "other",
+      "published_at": "2026-07-02T16:20:00+08:00",
+      "content_type": "application/json",
+      "content": {
+        "basis": ["fact-zh-market-003", "fact-zh-sector-002", "fact-zh-policy-001"]
+      },
+      "facts": [
+        {
+          "fact_id": "fact-zh-risk-001",
+          "claim": "指数分化、弱势板块延续和监管通报共同提示，下一轮简报应继续跟踪风险偏好是否真正扩散。",
+          "classification": "inference",
+          "confidence": "medium",
+          "derived_from_fact_ids": ["fact-zh-market-003", "fact-zh-sector-002", "fact-zh-policy-001"],
+          "used_in_sections": ["risk_points"]
+        }
+      ]
+    }
+  ]
+}
