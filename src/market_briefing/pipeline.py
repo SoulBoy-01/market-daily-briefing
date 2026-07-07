@@ -10,6 +10,7 @@ from pathlib import Path
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.config import AppConfig, load_config
 from market_briefing.domain import AtomicFact, Report, ReportType, Run, RunStatus
+from market_briefing.feedback import summarize_feedback
 from market_briefing.reporting import build_report, render_html, render_markdown
 from market_briefing.storage import BriefingStore, build_report_paths
 from market_briefing.validation import validate_report_sections
@@ -25,7 +26,12 @@ class PipelineRequest:
 
 @dataclass(frozen=True)
 class PipelineResult:
-    report: Report
+    """
+    report is set only when validation_errors is empty and the pipeline succeeded.
+    If validation failed before files were written, report is None and run is FAILED.
+    """
+
+    report: Report | None
     validation_errors: list[str]
 
 
@@ -50,10 +56,7 @@ def run_fixture_pipeline(
         enabled_modules=enabled_modules,
         raw_dir=config.raw_dir,
     )
-    for snapshot in collection.snapshots:
-        store.save_snapshot(snapshot)
     facts = _scope_facts_to_run(collection.facts, request.run_id)
-    store.save_facts(facts)
 
     paths = build_report_paths(
         reports_dir=config.reports_dir,
@@ -61,7 +64,11 @@ def run_fixture_pipeline(
         report_type=request.report_type,
         run_id=request.run_id,
     )
-    paths.report_dir.mkdir(parents=True, exist_ok=True)
+    previous_feedback_summary = _load_previous_feedback(
+        store,
+        report_type=request.report_type,
+        report_date=request.report_date,
+    )
 
     report = build_report(
         report_id=f"report-{request.run_id}",
@@ -72,8 +79,25 @@ def run_fixture_pipeline(
         markdown_path=str(paths.markdown_path),
         html_path=str(paths.html_path),
         fact_ledger_path=str(paths.fact_ledger_path),
+        previous_feedback_summary=previous_feedback_summary,
     )
     validation = validate_report_sections(report.sections, facts)
+
+    if not validation.ok:
+        store.save_run(
+            replace(
+                run,
+                status=RunStatus.FAILED,
+                completed_at=datetime.now(timezone.utc),
+                warning_count=len(validation.errors),
+            )
+        )
+        return PipelineResult(report=None, validation_errors=validation.errors)
+
+    paths.report_dir.mkdir(parents=True, exist_ok=True)
+    for snapshot in collection.snapshots:
+        store.save_snapshot(snapshot)
+    store.save_facts(facts)
 
     markdown = render_markdown(report, facts)
     paths.markdown_path.write_text(markdown, encoding="utf-8")
@@ -91,13 +115,9 @@ def run_fixture_pipeline(
     store.save_run(
         replace(
             run,
-            status=(
-                RunStatus.COMPLETED
-                if validation.ok
-                else RunStatus.COMPLETED_WITH_WARNINGS
-            ),
+            status=RunStatus.COMPLETED,
             completed_at=datetime.now(timezone.utc),
-            warning_count=len(validation.errors),
+            warning_count=0,
         )
     )
     return PipelineResult(report=report, validation_errors=validation.errors)
@@ -115,6 +135,19 @@ def _scope_facts_to_run(facts: list[AtomicFact], run_id: str) -> list[AtomicFact
         )
         for fact in facts
     ]
+
+
+def _load_previous_feedback(
+    store: BriefingStore,
+    report_type: ReportType,
+    report_date: str,
+) -> str:
+    for report in store.list_reports():
+        # B2: same-day reruns are not prior rounds; only earlier report dates count.
+        if report.report_type != report_type or report.report_date >= report_date:
+            continue
+        return summarize_feedback(store.list_feedback(report.report_id))
+    return summarize_feedback([])
 
 
 def main() -> None:
@@ -147,6 +180,8 @@ def main() -> None:
         for error in result.validation_errors:
             print(error, file=sys.stderr)
         raise SystemExit(1)
+    if result.report is None:
+        raise RuntimeError("pipeline completed without a report")
     print(result.report.markdown_path)
 
 

@@ -95,7 +95,7 @@ def test_missing_provider_returns_template_report():
 
     assert result.used_fallback is True
     assert result.validation_errors == []
-    assert result.report.sections[0].section_id == "market_indices"
+    assert result.report.sections[0].section_id == "one_sentence_conclusion"
 
 
 def test_bad_llm_output_falls_back_to_template_report():
@@ -106,7 +106,7 @@ def test_bad_llm_output_falls_back_to_template_report():
         "section risk_points cites missing fact_id fact-missing",
         "section risk_points contains banned phrase 建议买入",
     ]
-    assert result.report.sections[0].section_id == "market_indices"
+    assert result.report.sections[0].section_id == "one_sentence_conclusion"
 
 
 def test_good_llm_output_is_used():
@@ -121,7 +121,7 @@ def test_provider_exception_falls_back_to_template_report():
 
     assert result.used_fallback is True
     assert result.validation_errors == ["provider failed: provider timeout"]
-    assert result.report.sections[0].section_id == "market_indices"
+    assert result.report.sections[0].section_id == "one_sentence_conclusion"
 
 
 def test_invalid_provider_sections_fall_back_to_template_report():
@@ -129,4 +129,4 @@ def test_invalid_provider_sections_fall_back_to_template_report():
 
     assert result.used_fallback is True
     assert result.validation_errors == ["provider returned invalid sections"]
-    assert result.report.sections[0].section_id == "market_indices"
+    assert result.report.sections[0].section_id == "one_sentence_conclusion"

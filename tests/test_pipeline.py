@@ -1,11 +1,12 @@
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from market_briefing.config import AppConfig
-from market_briefing.domain import ReportType, RunStatus
+from market_briefing.domain import FeedbackEntry, ReportType, RunStatus
 from market_briefing.pipeline import PipelineRequest, main, run_fixture_pipeline
 from market_briefing.storage import BriefingStore
 
@@ -165,6 +166,150 @@ def test_fixture_pipeline_preserves_fact_audit_history_across_repeated_runs(tmp_
     assert {record["fact_id"] for record in ledger} == second_fact_ids
 
 
+def test_fixture_pipeline_carries_previous_feedback_into_next_report(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+    first = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-feedback-a",
+            report_date="2026-07-02",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+    store.save_feedback(
+        FeedbackEntry(
+            feedback_id="feedback-001",
+            report_id=first.report.report_id,
+            section_id="next_watchlist",
+            score=3,
+            tags=("insufficient_risk",),
+            note="下一轮风险提示要更具体。",
+            created_at=datetime(2026, 7, 2, 16, 30, tzinfo=timezone.utc),
+        )
+    )
+
+    second = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-feedback-b",
+            report_date="2026-07-03",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+
+    feedback_sections = [
+        section for section in second.report.sections if section.section_id == "previous_feedback"
+    ]
+    assert len(feedback_sections) == 1
+    assert "下一轮风险提示要更具体。" in feedback_sections[0].body
+    assert "平均评分：3.0" in feedback_sections[0].body
+    assert "- 下一轮观察清单：评分=3" in feedback_sections[0].body
+
+
+def test_fixture_pipeline_uses_strict_previous_report_for_feedback(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+    first = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-strict-feedback-a",
+            report_date="2026-07-02",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+    store.save_feedback(
+        FeedbackEntry(
+            feedback_id="feedback-strict-001",
+            report_id=first.report.report_id,
+            section_id="next_watchlist",
+            score=2,
+            tags=("insufficient_risk",),
+            note="这条较早反馈不应跳过上一轮继续沿用。",
+            created_at=datetime(2026, 7, 2, 16, 30, tzinfo=timezone.utc),
+        )
+    )
+    run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-strict-feedback-b",
+            report_date="2026-07-03",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+
+    third = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-strict-feedback-c",
+            report_date="2026-07-04",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+
+    feedback_section = [
+        section for section in third.report.sections if section.section_id == "previous_feedback"
+    ][0]
+    assert "暂无历史反馈" in feedback_section.body
+    assert "这条较早反馈不应跳过上一轮继续沿用" not in feedback_section.body
+
+
+def test_fixture_pipeline_carries_previous_feedback_into_pre_open_report(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+    first = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-pre-open-feedback-a",
+            report_date="2026-07-03",
+            report_type=ReportType.PRE_OPEN_UPDATE,
+            fixture_path=Path("tests/fixtures/pre_open_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+    store.save_feedback(
+        FeedbackEntry(
+            feedback_id="feedback-pre-open-001",
+            report_id=first.report.report_id,
+            section_id="today_watchpoints",
+            score=4,
+            tags=("missing_key_point",),
+            note="盘前重点要更贴近开盘前可验证事项。",
+            created_at=datetime(2026, 7, 3, 8, 30, tzinfo=timezone.utc),
+        )
+    )
+
+    second = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-pre-open-feedback-b",
+            report_date="2026-07-04",
+            report_type=ReportType.PRE_OPEN_UPDATE,
+            fixture_path=Path("tests/fixtures/pre_open_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+
+    feedback_section = [
+        section for section in second.report.sections if section.section_id == "previous_feedback"
+    ][0]
+    assert "盘前重点要更贴近开盘前可验证事项。" in feedback_section.body
+    assert "平均评分：4.0" in feedback_section.body
+
+
 def test_fixture_pipeline_marks_valid_run_completed(tmp_path):
     config = _config(tmp_path)
     store = BriefingStore(config.database_path)
@@ -189,7 +334,7 @@ def test_fixture_pipeline_marks_valid_run_completed(tmp_path):
     assert run.warning_count == 0
 
 
-def test_fixture_pipeline_marks_validation_warnings_and_returns_errors(tmp_path):
+def test_fixture_pipeline_marks_validation_failure_and_returns_errors(tmp_path):
     config = _config(tmp_path)
     store = BriefingStore(config.database_path)
     store.initialize()
@@ -207,12 +352,19 @@ def test_fixture_pipeline_marks_validation_warnings_and_returns_errors(tmp_path)
     run = store.get_run("run-warning-001")
 
     assert result.validation_errors == [
-        "section market_indices contains banned phrase 建议买入"
+        "section one_sentence_conclusion contains banned phrase 建议买入",
+        "section market_overview contains banned phrase 建议买入",
+        "section fact_opinion_inference contains banned phrase 建议买入",
     ]
     assert run is not None
-    assert run.status == RunStatus.COMPLETED_WITH_WARNINGS
+    assert run.status == RunStatus.FAILED
     assert run.completed_at is not None
-    assert run.warning_count == 1
+    assert run.warning_count == 3
+    assert result.report is None
+    assert store.list_facts("run-warning-001") == []
+    assert store.list_snapshots("run-warning-001") == []
+    with pytest.raises(KeyError):
+        store.get_report("report-run-warning-001")
 
 
 def test_fixture_pipeline_generates_pre_open_report(tmp_path):
@@ -292,4 +444,5 @@ def test_main_prints_validation_errors_to_stderr_and_exits_nonzero(
 
     assert exc_info.value.code == 1
     assert captured.out == ""
-    assert "section market_indices contains banned phrase 建议买入" in captured.err
+    assert "section one_sentence_conclusion contains banned phrase 建议买入" in captured.err
+    assert "section fact_opinion_inference contains banned phrase 建议买入" in captured.err

@@ -7,6 +7,7 @@ import pytest
 from market_briefing.domain import (
     AtomicFact,
     FactClassification,
+    FactLine,
     RawSnapshot,
     Report,
     ReportSection,
@@ -113,11 +114,19 @@ def test_store_round_trips_snapshot_fact_and_report(tmp_path):
         title="After-close briefing",
         sections=[
             ReportSection(
-                "market_indices",
-                "Index performance",
-                "Shanghai Composite closed higher. [fact-001]",
-                ["fact-001"],
-                "ok",
+                section_id="market_indices",
+                title="Index performance",
+                body="Shanghai Composite closed higher. [fact-001]",
+                fact_ids=["fact-001"],
+                status="ok",
+                fact_lines=[
+                    FactLine(
+                        fact_id="fact-001",
+                        classification=FactClassification.FACT,
+                        claim="Shanghai Composite closed higher.",
+                        derived_from_fact_ids=["source-fact-001"],
+                    )
+                ],
             )
         ],
         markdown_path="reports/2026-07-02/after_close/briefing.md",
@@ -140,6 +149,45 @@ def test_store_round_trips_snapshot_fact_and_report(tmp_path):
     assert loaded_fact.used_in_sections == ("market_indices",)
     assert loaded_report.title == "After-close briefing"
     assert loaded_report.sections[0].fact_ids == ("fact-001",)
+    assert loaded_report.sections[0].fact_lines[0].fact_id == "fact-001"
+    assert loaded_report.sections[0].fact_lines[0].classification == FactClassification.FACT
+    assert loaded_report.sections[0].fact_lines[0].derived_from_fact_ids == ("source-fact-001",)
+
+
+def test_get_report_loads_legacy_sections_without_fact_lines(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    legacy_sections = (
+        '[{"section_id":"market_indices","title":"Market indices",'
+        '"body":"Legacy body [fact-001]","fact_ids":["fact-001"],"status":"ok"}]'
+    )
+    with store.connection() as connection:
+        connection.execute(
+            """
+            insert into reports (
+                report_id, run_id, report_date, report_type, title,
+                sections, markdown_path, html_path, fact_ledger_path
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "report-legacy",
+                "run-legacy",
+                "2026-07-02",
+                ReportType.AFTER_CLOSE.value,
+                "Legacy report",
+                legacy_sections,
+                "reports/legacy.md",
+                "reports/legacy.html",
+                "reports/legacy.json",
+            ),
+        )
+
+    report = store.get_report("report-legacy")
+
+    assert report.sections[0].body == "Legacy body [fact-001]"
+    assert report.sections[0].fact_ids == ("fact-001",)
+    assert report.sections[0].fact_lines == ()
 
 
 def test_get_report_raises_key_error_for_unknown_report(tmp_path):

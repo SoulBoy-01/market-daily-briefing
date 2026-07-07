@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
 import re
 from typing import Annotated
@@ -14,8 +14,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from market_briefing.config import AppConfig, load_config
-from market_briefing.domain import FeedbackEntry, RawSnapshot, ReportType
+from market_briefing.domain import FeedbackEntry, RawSnapshot, Report, ReportType
 from market_briefing.feedback import ALLOWED_FEEDBACK_TAGS, summarize_feedback, validate_feedback_entry
+from market_briefing.labels import (
+    confidence_label,
+    fact_classification_label,
+    feedback_tag_label,
+    feedback_tags_label,
+    module_label,
+    report_type_label,
+    section_label,
+    source_type_label,
+    status_label,
+)
 from market_briefing.pipeline import PipelineRequest, run_fixture_pipeline
 from market_briefing.storage import BriefingStore
 
@@ -26,6 +37,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 REPORT_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SAFE_SOURCE_SCHEMES = {"fixture", "http", "https"}
+CHINA_MARKET_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def default_config_path() -> Path:
@@ -39,29 +51,41 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
 
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     templates.env.filters["safe_source_url"] = safe_source_url
-    app = FastAPI(title="Market Briefing Loop Dashboard")
+    templates.env.filters["report_type_label"] = report_type_label
+    templates.env.filters["fact_classification_label"] = fact_classification_label
+    templates.env.filters["source_type_label"] = source_type_label
+    templates.env.filters["confidence_label"] = confidence_label
+    templates.env.filters["status_label"] = status_label
+    templates.env.filters["module_label"] = module_label
+    templates.env.filters["section_label"] = section_label
+    templates.env.filters["feedback_tag_label"] = feedback_tag_label
+    templates.env.filters["feedback_tags_label"] = feedback_tags_label
+    app = FastAPI(title="A股每日市场简报工作台")
     app.state.config = app_config
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.get("/")
     def dashboard(request: Request):
-        latest_report = briefing_store.latest_report()
         reports = briefing_store.list_reports()
+        latest_report = reports[0] if reports else None
+        review_report = _select_review_report(reports, latest_report)
         latest_feedback = (
-            briefing_store.list_feedback(latest_report.report_id) if latest_report else []
+            briefing_store.list_feedback(review_report.report_id) if review_report else []
         )
         latest_facts = (
-            briefing_store.list_facts(latest_report.run_id) if latest_report else []
+            briefing_store.list_facts(review_report.run_id) if review_report else []
         )
         return templates.TemplateResponse(
             request,
             "dashboard.html",
             {
                 "latest_report": latest_report,
+                "review_report": review_report,
                 "reports": reports,
                 "latest_facts": latest_facts,
                 "feedback_summary": summarize_feedback(latest_feedback),
                 "report_types": list(ReportType),
+                "default_report_date": _default_report_date(),
             },
         )
 
@@ -70,7 +94,10 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         return templates.TemplateResponse(
             request,
             "run.html",
-            {"report_types": list(ReportType)},
+            {
+                "report_types": list(ReportType),
+                "default_report_date": _default_report_date(),
+            },
         )
 
     @app.post("/runs/fixture")
@@ -98,6 +125,11 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="; ".join(result.validation_errors),
             )
+        if result.report is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="pipeline completed without a report",
+            )
         return RedirectResponse(
             url=f"/reports/{result.report.report_id}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -116,19 +148,12 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         return templates.TemplateResponse(
             request,
             "report.html",
-            {
-                "report": report,
-                "facts": facts,
-                "facts_by_id": {fact.fact_id: fact for fact in facts},
-                "snapshots": [_snapshot_view(snapshot) for snapshot in snapshots],
-                "feedback": feedback,
-                "feedback_summary": summarize_feedback(feedback),
-                "feedback_tags": sorted(ALLOWED_FEEDBACK_TAGS),
-            },
+            _report_template_context(report, facts, snapshots, feedback),
         )
 
     @app.post("/reports/{report_id}/feedback")
     def submit_feedback(
+        request: Request,
         report_id: str,
         section_id: Annotated[str, Form()],
         score: Annotated[int, Form()],
@@ -144,7 +169,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         if section_id not in section_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="section_id is not present in this report",
+                detail="section_id 不属于当前简报",
             )
 
         entry = FeedbackEntry(
@@ -158,9 +183,26 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         )
         errors = validate_feedback_entry(entry)
         if errors:
-            raise HTTPException(
+            facts = briefing_store.list_facts(report.run_id)
+            snapshots = briefing_store.list_snapshots(report.run_id)
+            feedback = briefing_store.list_feedback(report.report_id)
+            return templates.TemplateResponse(
+                request,
+                "report.html",
+                _report_template_context(
+                    report,
+                    facts,
+                    snapshots,
+                    feedback,
+                    feedback_errors=errors,
+                    feedback_form={
+                        "section_id": section_id,
+                        "score": score,
+                        "tags": list(tags or []),
+                        "note": entry.note,
+                    },
+                ),
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="; ".join(errors),
             )
         briefing_store.save_feedback(entry)
         return RedirectResponse(
@@ -171,6 +213,13 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     return app
 
 
+def _select_review_report(reports: list[Report], fallback: Report | None) -> Report | None:
+    for report in reports:
+        if report.report_type == ReportType.AFTER_CLOSE:
+            return report
+    return fallback
+
+
 def _snapshot_view(snapshot: RawSnapshot) -> dict[str, object]:
     raw_path = Path(snapshot.raw_path)
     content = ""
@@ -179,11 +228,32 @@ def _snapshot_view(snapshot: RawSnapshot) -> dict[str, object]:
     return {"snapshot": snapshot, "content": content}
 
 
+def _report_template_context(
+    report: Report,
+    facts: list[object],
+    snapshots: list[RawSnapshot],
+    feedback: list[FeedbackEntry],
+    feedback_errors: list[dict[str, str]] | None = None,
+    feedback_form: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "report": report,
+        "facts": facts,
+        "facts_by_id": {fact.fact_id: fact for fact in facts},
+        "snapshots": [_snapshot_view(snapshot) for snapshot in snapshots],
+        "feedback": feedback,
+        "feedback_summary": summarize_feedback(feedback),
+        "feedback_tags": sorted(ALLOWED_FEEDBACK_TAGS),
+        "feedback_errors": feedback_errors or [],
+        "feedback_form": feedback_form or {},
+    }
+
+
 def _validate_run_id(run_id: str) -> None:
     if not RUN_ID_PATTERN.fullmatch(run_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="run_id may contain only letters, numbers, underscores, and hyphens",
+            detail="run_id 只能包含字母、数字、下划线和连字符",
         )
 
 
@@ -191,7 +261,7 @@ def _validate_report_date(report_date: str) -> None:
     if not REPORT_DATE_PATTERN.fullmatch(report_date):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="report_date must use YYYY-MM-DD",
+            detail="report_date 必须使用 YYYY-MM-DD 格式",
         )
 
 
@@ -207,7 +277,7 @@ def _validate_fixture_path(fixture_path: str) -> Path:
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="fixture_path must be a relative path without traversal",
+            detail="fixture_path 必须是不含路径穿越的相对路径",
         )
 
     project_root = PROJECT_ROOT.resolve()
@@ -215,13 +285,13 @@ def _validate_fixture_path(fixture_path: str) -> Path:
     if not candidate.is_relative_to(project_root):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="fixture_path must stay under the project root",
+            detail="fixture_path 必须位于项目根目录内",
         )
 
     if candidate.is_file():
         return candidate
 
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fixture_path does not exist")
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fixture_path 不存在")
 
 
 def safe_source_url(source_url: str) -> str | None:
@@ -247,6 +317,10 @@ def _resolve_default_config_path(path: Path, project_root: Path) -> Path:
     if path.is_absolute():
         return path
     return (project_root / path).resolve()
+
+
+def _default_report_date() -> str:
+    return datetime.now(CHINA_MARKET_TIMEZONE).date().isoformat()
 
 
 app = create_app()

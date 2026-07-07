@@ -128,15 +128,29 @@ class AtomicFact:
 
 
 @dataclass(frozen=True)
+class FactLine:
+    fact_id: str
+    classification: FactClassification
+    claim: str
+    derived_from_fact_ids: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "classification", FactClassification(self.classification))
+        object.__setattr__(self, "derived_from_fact_ids", tuple(self.derived_from_fact_ids))
+
+
+@dataclass(frozen=True)
 class ReportSection:
     section_id: str
     title: str
     body: str
     fact_ids: tuple[str, ...]
     status: str
+    fact_lines: tuple[FactLine, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fact_ids", tuple(self.fact_ids))
+        object.__setattr__(self, "fact_lines", tuple(self.fact_lines))
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,7 @@ from typing import Any
 from market_briefing.domain import (
     AtomicFact,
     FactClassification,
+    FactLine,
     FeedbackEntry,
     RawSnapshot,
     Report,
@@ -312,7 +313,7 @@ class BriefingStore:
             report_date=row["report_date"],
             report_type=ReportType(row["report_type"]),
             title=row["title"],
-            sections=[ReportSection(**section) for section in sections_payload],
+            sections=[_section_from_record(section) for section in sections_payload],
             markdown_path=row["markdown_path"],
             html_path=row["html_path"],
             fact_ledger_path=row["fact_ledger_path"],
@@ -394,7 +395,35 @@ def _section_to_record(section: ReportSection) -> dict[str, Any]:
         "body": section.body,
         "fact_ids": list(section.fact_ids),
         "status": section.status,
+        "fact_lines": [
+            {
+                "fact_id": fact_line.fact_id,
+                "classification": fact_line.classification.value,
+                "claim": fact_line.claim,
+                "derived_from_fact_ids": list(fact_line.derived_from_fact_ids),
+            }
+            for fact_line in section.fact_lines
+        ],
     }
+
+
+def _section_from_record(payload: dict[str, Any]) -> ReportSection:
+    return ReportSection(
+        section_id=payload["section_id"],
+        title=payload["title"],
+        body=payload["body"],
+        fact_ids=payload["fact_ids"],
+        status=payload["status"],
+        fact_lines=[
+            FactLine(
+                fact_id=fact_line["fact_id"],
+                classification=FactClassification(fact_line["classification"]),
+                claim=fact_line["claim"],
+                derived_from_fact_ids=fact_line.get("derived_from_fact_ids", []),
+            )
+            for fact_line in payload.get("fact_lines", [])
+        ],
+    )
 
 
 SCHEMA = """
