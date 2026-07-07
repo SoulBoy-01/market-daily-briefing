@@ -57,6 +57,13 @@ def test_summarize_feedback_returns_exact_empty_context():
     assert summarize_feedback([]) == "暂无历史反馈。"
 
 
+def test_summarize_feedback_accepts_contextual_empty_message():
+    assert (
+        summarize_feedback([], empty_message="暂无历史反馈。上一轮简报未收到反馈提交。")
+        == "暂无历史反馈。上一轮简报未收到反馈提交。"
+    )
+
+
 def test_summarize_feedback_uses_section_label_for_beginner_sections():
     entries = [
         FeedbackEntry(

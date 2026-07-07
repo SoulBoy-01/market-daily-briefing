@@ -212,6 +212,28 @@ def test_fixture_pipeline_carries_previous_feedback_into_next_report(tmp_path):
     assert "- 下一轮观察清单：评分=3" in feedback_sections[0].body
 
 
+def test_fixture_pipeline_explains_first_run_feedback_empty_state(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+
+    result = run_fixture_pipeline(
+        PipelineRequest(
+            run_id="run-feedback-first",
+            report_date="2026-07-02",
+            report_type=ReportType.AFTER_CLOSE,
+            fixture_path=Path("tests/fixtures/after_close_sources.json"),
+        ),
+        config=config,
+        store=store,
+    )
+
+    feedback_section = [
+        section for section in result.report.sections if section.section_id == "previous_feedback"
+    ][0]
+    assert "首次提交反馈后，下一轮简报会在这里显示您的意见回执。" in feedback_section.body
+
+
 def test_fixture_pipeline_uses_strict_previous_report_for_feedback(tmp_path):
     config = _config(tmp_path)
     store = BriefingStore(config.database_path)
@@ -262,7 +284,7 @@ def test_fixture_pipeline_uses_strict_previous_report_for_feedback(tmp_path):
     feedback_section = [
         section for section in third.report.sections if section.section_id == "previous_feedback"
     ][0]
-    assert "暂无历史反馈" in feedback_section.body
+    assert "暂无历史反馈。上一轮简报未收到反馈提交。" in feedback_section.body
     assert "这条较早反馈不应跳过上一轮继续沿用" not in feedback_section.body
 
 

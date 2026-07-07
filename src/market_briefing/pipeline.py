@@ -10,7 +10,11 @@ from pathlib import Path
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.config import AppConfig, load_config
 from market_briefing.domain import AtomicFact, Report, ReportType, Run, RunStatus
-from market_briefing.feedback import summarize_feedback
+from market_briefing.feedback import (
+    FIRST_RUN_EMPTY_FEEDBACK_SUMMARY,
+    PREVIOUS_REPORT_EMPTY_FEEDBACK_SUMMARY,
+    summarize_feedback,
+)
 from market_briefing.reporting import build_report, render_html, render_markdown
 from market_briefing.storage import BriefingStore, build_report_paths
 from market_briefing.validation import validate_report_sections
@@ -146,8 +150,11 @@ def _load_previous_feedback(
         # B2: same-day reruns are not prior rounds; only earlier report dates count.
         if report.report_type != report_type or report.report_date >= report_date:
             continue
-        return summarize_feedback(store.list_feedback(report.report_id))
-    return summarize_feedback([])
+        return summarize_feedback(
+            store.list_feedback(report.report_id),
+            empty_message=PREVIOUS_REPORT_EMPTY_FEEDBACK_SUMMARY,
+        )
+    return summarize_feedback([], empty_message=FIRST_RUN_EMPTY_FEEDBACK_SUMMARY)
 
 
 def main() -> None:

@@ -5,6 +5,9 @@ from market_briefing.labels import FEEDBACK_TAG_LABELS, feedback_tags_label, sec
 
 
 ALLOWED_FEEDBACK_TAGS = set(FEEDBACK_TAG_LABELS)
+DEFAULT_EMPTY_FEEDBACK_SUMMARY = "暂无历史反馈。"
+FIRST_RUN_EMPTY_FEEDBACK_SUMMARY = "暂无历史反馈。首次提交反馈后，下一轮简报会在这里显示您的意见回执。"
+PREVIOUS_REPORT_EMPTY_FEEDBACK_SUMMARY = "暂无历史反馈。上一轮简报未收到反馈提交。"
 
 
 def validate_feedback_entry(entry: FeedbackEntry) -> list[dict[str, str]]:
@@ -37,9 +40,13 @@ def validate_feedback_entry(entry: FeedbackEntry) -> list[dict[str, str]]:
     return errors
 
 
-def summarize_feedback(entries: list[FeedbackEntry]) -> str:
+def summarize_feedback(
+    entries: list[FeedbackEntry],
+    *,
+    empty_message: str = DEFAULT_EMPTY_FEEDBACK_SUMMARY,
+) -> str:
     if not entries:
-        return "暂无历史反馈。"
+        return empty_message
 
     average = sum(entry.score for entry in entries) / len(entries)
     lines = [f"平均评分：{average:.1f}"]
