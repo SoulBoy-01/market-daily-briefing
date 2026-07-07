@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 .superpowers/
@@ -15,3 +16,7 @@ reports/*
 *.egg-info/
 build/
 dist/
+work/
+新建文本文档.txt
+codex-to-claude.md
+claude-to-codex.md

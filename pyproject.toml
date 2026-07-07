@@ -37,11 +37,12 @@ market-briefing = "market_briefing.pipeline:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-market_briefing = ["templates/*.html", "static/*.css"]
+market_briefing = ["templates/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--basetemp=pytest-tmp -p no:cacheprovider"
 
 [tool.ruff]
 line-length = 100
