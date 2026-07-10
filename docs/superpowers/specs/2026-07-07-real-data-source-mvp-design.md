@@ -1,316 +1,316 @@
-﻿# Real Data Source MVP Design
+# 真实数据源 MVP 设计
 
-Date: 2026-07-07
-Status: Ready for user review
+日期：2026-07-07
+状态：待用户审阅
 
-## Purpose
+## 目标
 
-Extend the A-share daily briefing MVP from fixture-only operation to a real-data, auditable run path while preserving fixture and mock replay for learning, testing, and debugging.
+将 A 股每日简报 MVP 从只能使用 fixture（固定样例数据）扩展为可运行真实数据、可审计的流程，同时保留 fixture 和 mock 回放能力，用于学习、测试和排查问题。
 
-The goal is not to maximize source coverage. The goal is to connect a small, reliable set of live sources into the existing loop:
+本阶段不追求覆盖尽可能多的数据源，而是把少量、可靠的真实来源接入现有闭环：
 
 ```text
-real source -> raw snapshot -> atomic facts -> report -> review UI -> feedback -> next run
+真实来源 -> 原始快照 -> 原子事实 -> 简报 -> 审阅界面 -> 反馈 -> 下一轮运行
 ```
 
-The feature must preserve the core safety boundary: source verification, fact/opinion/inference separation, and no buy/sell or position advice.
+该功能必须守住现有安全边界：验证来源，区分事实、观点和推测，不提供买卖、目标价或仓位建议。
 
-## Chosen Scope
+## 已确认范围
 
-The first real-source version uses a mixed route:
+第一版真实数据源采用混合路线：
 
-- Market indices and sector moves come from a third-party data API adapter, initially through the existing AkShare-shaped adapter boundary.
-- Policy and regulatory information comes from official or exchange web sources.
-- Market news and institutional opinions are not automatically collected in this version, to avoid early fact/opinion contamination.
-- Fixture and mock replay remain first-class paths.
+- 市场指数和板块涨跌来自第三方数据 API 适配器，初期沿用现有的 AkShare 形态适配边界。
+- 政策和监管信息来自官方或交易所网站。
+- 本版本不自动采集市场新闻和机构观点，避免过早引入事实与观点混杂的问题。
+- fixture 和 mock 回放继续作为一等运行路径保留。
 
-This gives the report enough market shape to feel like a daily briefing while keeping the highest-risk interpretation layer small.
+这样既能让简报具备基本的市场全貌，又能把风险最高的解释层控制在较小范围内。
 
-## Existing Codebase Context
+## 现有代码基础
 
-The project already contains the main pieces needed for this feature:
+项目已经具备本功能所需的主要组件：
 
-- `MarketDataCollector` in `src/market_briefing/collectors/market_data.py`
-  - Uses a `MarketDataClient` protocol with `index_spot()` and `sector_spot()`.
-  - Produces `market_indices` and `sector_moves` facts.
-  - Has tests using `FakeMarketClient`.
-- `OfficialSourceCollector` in `src/market_briefing/collectors/official_sources.py`
-  - Fetches official/exchange pages with `httpx`.
-  - Stores HTML snapshots.
-  - Currently extracts title and first paragraph from a single page.
-  - Has tests using `httpx.MockTransport`.
-- `run_fixture_pipeline` in `src/market_briefing/pipeline.py`
-  - Owns run lifecycle, validation, persistence, report rendering, and previous-feedback context.
+- `src/market_briefing/collectors/market_data.py` 中的 `MarketDataCollector`
+  - 使用带有 `index_spot()` 和 `sector_spot()` 方法的 `MarketDataClient` 协议。
+  - 生成 `market_indices` 和 `sector_moves` 事实。
+  - 已有使用 `FakeMarketClient` 的测试。
+- `src/market_briefing/collectors/official_sources.py` 中的 `OfficialSourceCollector`
+  - 使用 `httpx` 抓取官方或交易所页面。
+  - 保存 HTML 原始快照。
+  - 当前只能从单个页面提取标题和首段。
+  - 已有使用 `httpx.MockTransport` 的测试。
+- `src/market_briefing/pipeline.py` 中的 `run_fixture_pipeline`
+  - 负责运行生命周期、校验、持久化、报告渲染和上一轮反馈上下文。
 
-The real-source MVP should reuse these patterns instead of creating a second reporting system.
+真实数据源 MVP 应复用这些模式，不另建第二套报告系统。
 
-## Running Modes
+## 运行模式
 
-The system will support three source modes:
+系统支持三种数据源模式：
 
 1. `fixture`
-   - Current deterministic fixture path.
-   - Used for tests, tutorials, and reproducible debugging.
+   - 现有的确定性样例数据路径。
+   - 用于测试、教程和可复现的问题排查。
 
 2. `mock_real`
-   - Uses real-source pipeline logic with fake market and official clients.
-   - Used for TDD and integration tests without network access.
+   - 使用真实数据源管线逻辑，但注入假的市场数据和官方来源客户端。
+   - 用于 TDD 和不依赖网络的集成测试。
 
 3. `real`
-   - Uses actual market and official source clients.
-   - Requires optional dependencies and network access.
-   - Must label third-party data clearly as `DATA_API`.
+   - 使用真实的市场数据与官方来源客户端。
+   - 需要可选依赖和网络连接。
+   - 第三方数据必须明确标记为 `DATA_API`。
 
-The CLI and web UI will call the same real-source pipeline function. CLI comes first for testability, but the first implementation slice should also expose a web button/form once the shared logic is covered.
+CLI 和 Web 界面调用同一个真实数据源管线函数。为了便于测试，先完成 CLI 能力；第一轮实现仍需在共享逻辑具备测试覆盖后提供 Web 按钮或表单。
 
-## User-Facing Entry Points
+## 用户入口
 
-CLI:
+CLI 真实数据运行示例：
 
 ```powershell
 market-briefing --source real --run-id real-after-close-20260707 --report-date 2026-07-07 --report-type after_close
 ```
 
-Fixture CLI remains supported:
+继续支持 fixture CLI：
 
 ```powershell
 market-briefing --source fixture --run-id fixture-after-close-20260707 --report-date 2026-07-07 --report-type after_close --fixture-path tests\fixtures\after_close_sources.json
 ```
 
-Web UI:
+Web 界面：
 
-- The dashboard keeps the existing fixture run form.
-- A separate real-data run form/button is added.
-- The UI must clearly distinguish fixture/sample data from real data.
-- Real-data failures show warning summaries rather than stack traces.
+- 仪表盘保留现有的 fixture 运行表单。
+- 增加单独的真实数据运行表单或按钮。
+- 界面必须明确区分 fixture/样例数据与真实数据。
+- 真实数据运行失败时显示简洁的警告摘要，不显示堆栈信息。
 
-## Source Policy
+## 来源策略
 
-Market data:
+市场数据：
 
-- Source type: `DATA_API`.
-- Expected modules: `market_indices`, `sector_moves`.
-- Confidence: usually `medium`, because the source is a third-party adapter.
-- Claims should be strictly numerical and descriptive, such as index close/change or sector move.
-- No explanation or recommendation should be inferred from market data alone.
+- 来源类型：`DATA_API`。
+- 预期模块：`market_indices`、`sector_moves`。
+- 置信度：通常为 `medium`，因为数据来自第三方适配器。
+- 事实陈述必须严格保持数值化和描述性，例如指数收盘点位、涨跌幅或板块涨跌。
+- 不得仅凭市场数据自动推导原因、解释或建议。
 
-Official/regulatory data:
+官方与监管数据：
 
-- Source type: `OFFICIAL` or `EXCHANGE`.
-- Expected module: `policy_regulation`.
-- Confidence: `high` for source publication facts when the source is official or exchange-owned.
-- Claims should state that an official/exchange source published a named item.
-- Details may summarize the first paragraph, but should remain descriptive.
+- 来源类型：`OFFICIAL` 或 `EXCHANGE`。
+- 预期模块：`policy_regulation`。
+- 当信息来自官方或交易所自有页面时，对“该来源发布了某项内容”这一事实使用 `high` 置信度。
+- 事实应表述为某官方或交易所来源发布了某个具体项目。
+- 详情可以摘取首段内容，但必须保持描述性。
 
-News/opinion:
+新闻与观点：
 
-- Not collected automatically in this version.
-- Existing fixture examples may still include `major_news` for learning.
-- Future work can add media collection with strict `OPINION` or `UNVERIFIED` handling.
+- 本版本不自动采集。
+- 现有 fixture 示例仍可保留 `major_news`，用于学习。
+- 后续可以增加媒体采集，但必须严格使用 `OPINION` 或 `UNVERIFIED` 分类规则。
 
-## Official Source Depth
+## 官方来源抓取深度
 
-The official/regulatory collector should support list plus detail capture.
+官方与监管采集器应支持“列表页 + 详情页”两层抓取。
 
-List capture:
+列表页抓取：
 
-- Fetch an announcement/list page.
-- Extract latest item title, link, and publication time when available.
-- Save the list page as a raw snapshot.
-- Generate a `FACT` that the source published the listed item.
+- 请求公告或信息列表页。
+- 在可获取时提取最新项目的标题、链接和发布时间。
+- 将列表页保存为原始快照。
+- 生成一个 `FACT`，说明该来源发布了列表中的项目。
 
-Detail capture:
+详情页抓取：
 
-- Fetch the detail page for each selected list item.
-- Save the detail page as a second raw snapshot or linked raw file.
-- Extract the first paragraph or short summary if available.
-- Add the detail text to the claim only when it is directly extracted from the official/exchange detail page.
+- 请求每个已选列表项目的详情页。
+- 将详情页保存为第二份原始快照或关联的原始文件。
+- 在可获取时提取首段或简短摘要。
+- 只有在文本直接取自官方或交易所详情页时，才能把详情内容加入事实陈述。
 
-If list capture succeeds but detail capture fails:
+如果列表页抓取成功、详情页抓取失败：
 
-- Keep the list-derived fact.
-- Emit a warning for the failed detail fetch.
-- Do not invent summary text.
+- 保留由列表页生成的事实。
+- 为详情页请求失败生成警告。
+- 不得编造摘要文本。
 
-If list capture fails:
+如果列表页抓取失败：
 
-- Treat that source as failed for critical-source evaluation.
+- 在关键来源判定中，将该来源视为失败。
 
-## Failure Policy
+## 失败策略
 
-The real-source pipeline uses partial success with explicit warnings.
+真实数据源管线采用“允许部分成功，并明确显示警告”的策略。
 
-Critical groups:
+关键数据组：
 
-1. Market group
-   - `market_indices` or `sector_moves` must produce at least one fact.
+1. 市场组
+   - `market_indices` 或 `sector_moves` 至少生成一条事实。
 
-2. Official/regulatory group
-   - `policy_regulation` must produce at least one `OFFICIAL` or `EXCHANGE` fact.
+2. 官方与监管组
+   - `policy_regulation` 至少生成一条来源类型为 `OFFICIAL` 或 `EXCHANGE` 的事实。
 
-If either critical group fully fails:
+如果任意关键数据组完全失败：
 
-- Mark the run as `FAILED`.
-- Do not publish a normal report, fact ledger, or snapshots into the review ledger.
-- Record source warning/error summaries for diagnosis.
-- Successful fetches from that failed run are not persisted into the normal review ledger. A future quarantine/debug store is out of scope for this MVP.
+- 将运行标记为 `FAILED`。
+- 不向正常审阅账本发布报告、事实账本或原始快照。
+- 记录来源警告或错误摘要，供诊断使用。
+- 即使该失败运行中有部分请求成功，其结果也不进入正常审阅账本。隔离区或调试存储不属于本 MVP 范围。
 
-If critical groups pass but some enabled source fails:
+如果关键数据组均通过，但部分已启用来源失败：
 
-- Generate the report from available facts.
-- Mark the run as `COMPLETED_WITH_WARNINGS`.
-- Persist warning count and user-facing warning summaries.
+- 使用可用事实生成报告。
+- 将运行标记为 `COMPLETED_WITH_WARNINGS`。
+- 持久化警告数量和面向用户的警告摘要。
 
-If validation fails after collection:
+如果采集完成后的内容校验失败：
 
-- Preserve the existing rule: do not publish polluted reports, facts, or snapshots into the normal review ledger.
-- Mark the run as `FAILED`.
+- 延续现有规则：受污染的报告、事实和原始快照不得进入正常审阅账本。
+- 将运行标记为 `FAILED`。
 
-No automatic fallback from real data to fixture data is allowed. Fixture mode must be explicit.
+真实数据运行不得自动回退到 fixture 数据。使用 fixture 必须是用户明确选择的模式。
 
-## Warning Model
+## 警告模型
 
-The first version shows concise warnings:
-
-```text
-<source name> / <module> / <error summary>
-```
-
-Examples:
+第一版使用简洁的警告格式：
 
 ```text
-Shanghai Stock Exchange / policy_regulation / HTTP 500
-AkShare adapter / market_indices / missing column: close
+<来源名称> / <模块> / <错误摘要>
 ```
 
-Warning display:
+示例：
 
-- CLI prints warning summaries after the run.
-- Dashboard and report pages show warning summaries near run/report metadata.
-- The user-facing UI does not show Python stack traces.
+```text
+上海证券交易所 / policy_regulation / HTTP 500
+AkShare 适配器 / market_indices / 缺少字段：close
+```
 
-Detailed error storage is deferred. A future version can add a structured warning table or JSON log with exception class, traceback, retry count, and request metadata.
+警告显示位置：
 
-## Data Model Impact
+- CLI 在运行结束后输出警告摘要。
+- 仪表盘和报告页在运行或报告元数据附近显示警告摘要。
+- 面向用户的界面不得显示 Python 堆栈信息。
 
-The current `Run` model has `warning_count` and `error_message`, but does not have structured warning records.
+详细错误存储延后处理。未来版本可以增加结构化警告表或 JSON 日志，保存异常类型、堆栈、重试次数和请求元数据。
 
-First implementation should avoid a large storage migration if possible:
+## 数据模型影响
 
-- Use `warning_count` for run status summary.
-- Store concise warning text in `error_message` when the run fails.
-- For completed-with-warnings, add the smallest persistence needed to show warning summaries in CLI and web UI. If a migration is required, keep it narrow and covered by tests.
+当前 `Run` 模型已有 `warning_count` 和 `error_message`，但没有结构化警告记录。
 
-If structured warnings become too awkward to persist without schema churn, the implementation should introduce a `run_warnings` table with:
+第一轮实现应尽量避免大规模存储迁移：
+
+- 使用 `warning_count` 表示运行警告数量。
+- 运行失败时，在 `error_message` 中保存简洁的警告文本。
+- 对于 `COMPLETED_WITH_WARNINGS`，增加能够让 CLI 和 Web 界面显示警告摘要的最小持久化能力。如果必须迁移数据库，应保持改动范围小并提供测试覆盖。
+
+如果不修改结构就难以合理保存警告，可以新增 `run_warnings` 表，字段为：
 
 - `warning_id`
 - `run_id`
 - `source_name`
 - `module`
 - `message`
-- `detail` optional
+- 可选的 `detail`
 - `created_at`
 
-This table is preferable to overloading report sections with operational errors.
+与把运行错误混入报告章节相比，独立警告表更合适。
 
-## Pipeline Shape
+## 管线结构
 
-Add a real-source pipeline function parallel to the fixture path:
+新增一个与 fixture 路径并行的真实数据源管线函数：
 
 ```text
 run_real_pipeline(request, config, store, collector_bundle)
 ```
 
-The function should share the report-building and validation path with fixture runs:
+该函数与 fixture 运行共享报告构建和校验路径：
 
-1. Create run.
-2. Collect from market and official collectors.
-3. Aggregate facts, snapshots, and warnings.
-4. Apply critical-group checks.
-5. Build report from available facts.
-6. Validate report sections.
-7. Persist snapshots/facts/report only if publication is allowed.
-8. Save final run status as `COMPLETED`, `COMPLETED_WITH_WARNINGS`, or `FAILED`.
+1. 创建 run。
+2. 调用市场数据和官方来源采集器。
+3. 汇总事实、原始快照和警告。
+4. 执行关键数据组检查。
+5. 使用可用事实构建报告。
+6. 校验报告章节。
+7. 只有允许发布时，才持久化原始快照、事实和报告。
+8. 将最终运行状态保存为 `COMPLETED`、`COMPLETED_WITH_WARNINGS` 或 `FAILED`。
 
-Avoid duplicating report rendering logic between fixture and real runs. Shared helpers can be extracted from `run_fixture_pipeline` only when they reduce duplication without obscuring audit behavior.
+避免在 fixture 和真实数据运行之间复制报告渲染逻辑。只有在确实减少重复、且不会让审计行为变得模糊时，才从 `run_fixture_pipeline` 提取共享辅助函数。
 
-## Validation Rules
+## 校验规则
 
-Existing validation rules remain in force:
+继续执行现有校验规则：
 
-- `one_sentence_conclusion` only cites `FACT`.
-- `next_watchlist` and `today_watchpoints` reject `OPINION` and `UNVERIFIED`.
-- `market_overview` and `sector_strength` reject `UNVERIFIED` and require rooted inferences.
-- Banned investment-advice phrases remain prohibited.
+- `one_sentence_conclusion` 只能引用 `FACT`。
+- `next_watchlist` 和 `today_watchpoints` 拒绝 `OPINION` 与 `UNVERIFIED`。
+- `market_overview` 和 `sector_strength` 拒绝 `UNVERIFIED`，并要求推测具有事实派生链。
+- 继续禁止投资建议类词句。
 
-Additional real-source rules:
+真实数据源增加以下规则：
 
-- Third-party market facts are never `OFFICIAL`.
-- Official/regulatory critical-group success requires `source_type` of `OFFICIAL` or `EXCHANGE`.
-- A failed source cannot generate facts.
-- A detail-page failure cannot convert a list-page fact into an inference.
+- 第三方市场数据事实不得标记为 `OFFICIAL`。
+- 官方与监管关键组只有在 `source_type` 为 `OFFICIAL` 或 `EXCHANGE` 时才算成功。
+- 失败的数据源不能生成事实。
+- 详情页失败不能把列表页事实转换成推测。
 
-## Testing Strategy
+## 测试策略
 
-Tests should not depend on live network access.
+默认测试不得依赖真实网络。
 
-Required tests:
+必须覆盖：
 
-- Market collector still normalizes index and sector rows using fake clients.
-- Official collector parses list plus detail pages using `httpx.MockTransport`.
-- Detail failure preserves list fact and emits a warning.
-- List failure marks that source failed.
-- Real pipeline publishes a report when both critical groups have facts.
-- Real pipeline marks `COMPLETED_WITH_WARNINGS` when critical groups pass but a non-blocking source/detail fails.
-- Real pipeline marks `FAILED` and publishes no normal report when market group fails.
-- Real pipeline marks `FAILED` and publishes no normal report when official/regulatory group fails.
-- CLI can run fixture mode and real/mock mode through the same command surface.
-- Web form triggers the same real pipeline path and renders warning summaries.
+- 市场采集器仍能通过假客户端规范化指数和板块数据行。
+- 官方来源采集器能够使用 `httpx.MockTransport` 解析列表页和详情页。
+- 详情页失败时保留列表事实，并生成警告。
+- 列表页失败时将该来源标记为失败。
+- 当两个关键数据组都有事实时，真实数据管线发布报告。
+- 当关键数据组通过、但非阻断来源或详情页失败时，运行标记为 `COMPLETED_WITH_WARNINGS`。
+- 当市场组失败时，真实数据管线标记为 `FAILED`，且不发布正常报告。
+- 当官方与监管组失败时，真实数据管线标记为 `FAILED`，且不发布正常报告。
+- CLI 可以通过同一命令入口运行 fixture、real 和 mock 模式。
+- Web 表单调用同一真实数据管线路径，并显示警告摘要。
 
-Live-source smoke tests can be manual or opt-in only, never part of the default test suite.
+真实来源冒烟测试只能手动执行或显式启用，不得加入默认测试套件。
 
-## Web UI Impact
+## Web 界面影响
 
-Dashboard:
+仪表盘：
 
-- Keep existing sample/fixture run form.
-- Add a separate real-data run form.
-- Label the real-data run form clearly as live/third-party/official-source based.
-- Show warning summaries in the latest report/run area.
+- 保留现有样例数据或 fixture 运行表单。
+- 增加单独的真实数据运行表单。
+- 明确标注真实数据表单使用在线第三方数据和官方来源。
+- 在最新报告或运行区域显示警告摘要。
 
-Report page:
+报告页：
 
-- Show run status and warning summaries near report metadata.
-- Keep raw snapshot and fact ledger inspection unchanged.
-- Do not display operational warnings as market facts.
+- 在报告元数据附近显示运行状态和警告摘要。
+- 保持现有原始快照和事实账本检查方式不变。
+- 不得把运行警告显示成市场事实。
 
-Empty or failed real runs:
+空结果或失败的真实数据运行：
 
-- If the real run fails before publication, redirect or render an error state that explains which critical group failed.
-- Do not show a report that looks complete when critical groups failed.
+- 如果真实数据运行在发布前失败，应跳转或渲染错误状态，说明哪个关键数据组失败。
+- 关键数据组失败时，不得展示一份看起来完整的报告。
 
-## Out of Scope
+## 本版本不包含
 
-- Automatic scheduling.
-- Alerts or push notifications.
-- Full media/news ingestion.
-- Full-text official announcement understanding.
-- LLM summarization of official documents.
-- Retries, backoff, and source health dashboards.
-- Multi-user permission handling.
-- Production deployment.
+- 自动定时运行。
+- 提醒或推送通知。
+- 完整的媒体与新闻采集。
+- 官方公告全文理解。
+- 使用 LLM 总结官方文件。
+- 重试、退避和来源健康度仪表盘。
+- 多用户权限管理。
+- 生产环境部署。
 
-## Acceptance Criteria
+## 验收标准
 
-- A user can run fixture mode exactly as before.
-- A user can run real/mock mode from CLI.
-- A user can trigger real data from the dashboard.
-- Published real runs produce raw snapshots for every successful source fetch.
-- Reports cite only persisted atomic facts.
-- Third-party market facts are labeled as `DATA_API`.
-- Official/regulatory facts are sourced from `OFFICIAL` or `EXCHANGE`.
-- If both critical groups have at least one fact, a report can be published.
-- If a non-critical source or detail page fails, the run completes with warnings and displays source/module/error summaries.
-- If market facts are completely absent, the run fails and does not publish a normal report.
-- If official/regulatory facts are completely absent, the run fails and does not publish a normal report.
-- No real-source run silently falls back to fixture data.
+- 用户仍能按原方式运行 fixture 模式。
+- 用户能从 CLI 运行 real 或 mock 模式。
+- 用户能从仪表盘触发真实数据运行。
+- 通过发布门禁的真实数据运行，会为每次成功的数据请求保存原始快照。
+- 报告只引用已持久化的原子事实。
+- 第三方市场事实标记为 `DATA_API`。
+- 官方与监管事实来源标记为 `OFFICIAL` 或 `EXCHANGE`。
+- 两个关键数据组都至少有一条事实时，报告才允许发布。
+- 非关键来源或详情页失败时，运行以警告状态完成，并显示来源、模块和错误摘要。
+- 市场事实完全缺失时，运行失败且不发布正常报告。
+- 官方与监管事实完全缺失时，运行失败且不发布正常报告。
+- 真实数据运行不得静默回退到 fixture 数据。
