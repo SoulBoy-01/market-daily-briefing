@@ -4,8 +4,11 @@ import sqlite3
 
 import pytest
 
+from market_briefing.audit import write_snapshot_text
 from market_briefing.domain import (
     AtomicFact,
+    CandidateReviewStatus,
+    EvidenceCandidate,
     FactClassification,
     FactLine,
     RawSnapshot,
@@ -19,12 +22,13 @@ from market_briefing.domain import (
 from market_briefing.storage import (
     AuditIntegrityError,
     BriefingStore,
+    CandidateAlreadyExistsError,
+    CandidateAlreadyReviewedError,
     InvalidRunTransitionError,
     RunAlreadyExistsError,
     PublishedRecordExistsError,
     build_report_paths,
 )
-from market_briefing.audit import write_snapshot_text
 
 
 class TrackingConnection(sqlite3.Connection):
@@ -41,6 +45,21 @@ class TrackingStore(BriefingStore):
         connection = sqlite3.connect(self.database_path, factory=TrackingConnection)
         connection.row_factory = sqlite3.Row
         return connection
+
+
+def _candidate(candidate_id: str = "candidate-001") -> EvidenceCandidate:
+    return EvidenceCandidate(
+        candidate_id=candidate_id,
+        run_id="run-candidates",
+        snapshot_id="snapshot-candidates",
+        module="policy_regulation",
+        title="交易所发布一项规则说明",
+        detail_url="https://example.test/rule-001",
+        published_at=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
+        excerpt="规则说明自发布之日起施行。",
+        suggested_classification=FactClassification.FACT,
+        created_at=datetime(2026, 7, 2, 8, 5, tzinfo=timezone.utc),
+    )
 
 
 def test_store_initializes_schema_and_round_trips_run(tmp_path):
@@ -216,6 +235,131 @@ def test_initialize_upgrades_legacy_snapshot_columns(tmp_path):
     assert snapshot.content_sha256 == ""
     assert snapshot.provider_name == "Legacy Provider"
     assert snapshot.license_ref is None
+
+
+def test_initialize_upgrades_legacy_facts_with_candidate_audit_links(tmp_path):
+    database_path = tmp_path / "legacy-facts.sqlite"
+    store = BriefingStore(database_path)
+    store.initialize()
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("alter table facts rename to facts_current")
+        connection.execute(
+            """
+            create table facts (
+                fact_id text primary key,
+                run_id text not null,
+                report_date text not null,
+                report_type text not null,
+                module text not null,
+                claim text not null,
+                classification text not null,
+                source_name text not null,
+                source_url text not null,
+                source_type text not null,
+                published_at text,
+                fetched_at text not null,
+                confidence text not null,
+                raw_snapshot_path text not null,
+                derived_from_fact_ids text not null,
+                used_in_sections text not null
+            )
+            """
+        )
+        connection.execute("drop table facts_current")
+        connection.execute(
+            """
+            insert into facts values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-fact",
+                "legacy-run",
+                "2026-07-01",
+                "after_close",
+                "market_indices",
+                "Legacy fact.",
+                "fact",
+                "Legacy Provider",
+                "fixture://legacy",
+                "data_api",
+                None,
+                "2026-07-01T07:00:00+00:00",
+                "high",
+                "legacy.json",
+                "[]",
+                "[]",
+            ),
+        )
+
+    store.initialize()
+
+    fact = store.list_facts("legacy-run")[0]
+    assert fact.source_candidate_id is None
+    assert fact.source_snapshot_id is None
+
+
+def test_candidate_is_insert_only_and_starts_with_pending_review_event(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    candidate = _candidate()
+
+    store.save_candidate(candidate)
+
+    with pytest.raises(CandidateAlreadyExistsError, match=candidate.candidate_id):
+        store.save_candidate(candidate)
+    assert store.get_candidate(candidate.candidate_id) == candidate
+    assert store.candidate_review_status(candidate.candidate_id) == CandidateReviewStatus.PENDING
+    events = store.list_candidate_review_events(candidate.candidate_id)
+    assert [(event.from_status, event.to_status) for event in events] == [
+        (None, CandidateReviewStatus.PENDING)
+    ]
+
+
+def test_candidate_review_appends_terminal_event_and_rejects_repeat_review(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    candidate = _candidate()
+    store.save_candidate(candidate)
+
+    approved = store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.APPROVED,
+        reviewer_id="local-maintainer",
+        note="已核对详情页。",
+        approved_fact_id="fact-candidate-001",
+        reviewed_at=datetime(2026, 7, 2, 8, 10, tzinfo=timezone.utc),
+    )
+
+    assert approved.from_status == CandidateReviewStatus.PENDING
+    assert approved.to_status == CandidateReviewStatus.APPROVED
+    assert approved.approved_fact_id == "fact-candidate-001"
+    assert store.candidate_review_status(candidate.candidate_id) == CandidateReviewStatus.APPROVED
+    with pytest.raises(CandidateAlreadyReviewedError, match=candidate.candidate_id):
+        store.review_candidate(
+            candidate.candidate_id,
+            CandidateReviewStatus.REJECTED,
+            reviewer_id="local-maintainer",
+            note="不得覆盖上一条审核。",
+        )
+    assert [
+        event.to_status for event in store.list_candidate_review_events(candidate.candidate_id)
+    ] == [CandidateReviewStatus.PENDING, CandidateReviewStatus.APPROVED]
+
+
+def test_rejected_candidate_has_no_approved_fact_id(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    candidate = _candidate(candidate_id="candidate-rejected")
+    store.save_candidate(candidate)
+
+    rejected = store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.REJECTED,
+        reviewer_id="local-maintainer",
+        note="摘录与详情页不一致。",
+    )
+
+    assert rejected.to_status == CandidateReviewStatus.REJECTED
+    assert rejected.approved_fact_id is None
 
 
 def test_store_closes_connections_after_operations(tmp_path):

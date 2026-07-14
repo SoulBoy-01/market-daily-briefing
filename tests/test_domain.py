@@ -5,6 +5,9 @@ import pytest
 
 from market_briefing.domain import (
     AtomicFact,
+    CandidateReviewEvent,
+    CandidateReviewStatus,
+    EvidenceCandidate,
     FactClassification,
     FeedbackEntry,
     RawSnapshot,
@@ -210,3 +213,35 @@ def test_run_event_is_immutable():
 
     with pytest.raises(AttributeError):
         event.to_status = RunStatus.RUNNING
+
+
+def test_evidence_candidate_and_review_event_are_immutable_audit_records():
+    candidate = EvidenceCandidate(
+        candidate_id="candidate-001",
+        run_id="run-001",
+        snapshot_id="snapshot-001",
+        module="policy_regulation",
+        title="交易所发布一项规则说明",
+        detail_url="https://example.test/rule-001",
+        published_at=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
+        excerpt="规则说明自发布之日起施行。",
+        suggested_classification=FactClassification.FACT,
+        created_at=datetime(2026, 7, 2, 8, 5, tzinfo=timezone.utc),
+    )
+    event = CandidateReviewEvent(
+        event_id=2,
+        candidate_id=candidate.candidate_id,
+        from_status=CandidateReviewStatus.PENDING,
+        to_status=CandidateReviewStatus.APPROVED,
+        reviewed_at=datetime(2026, 7, 2, 8, 10, tzinfo=timezone.utc),
+        reviewer_id="local-maintainer",
+        note="已与详情页原文核对。",
+        approved_fact_id="fact-candidate-001",
+    )
+
+    assert candidate.to_record()["suggested_classification"] == "fact"
+    assert event.to_status == CandidateReviewStatus.APPROVED
+    with pytest.raises(AttributeError):
+        candidate.title = "被覆盖的标题"
+    with pytest.raises(AttributeError):
+        event.note = "被覆盖的审核备注"

@@ -74,6 +74,12 @@ class FactClassification(StrEnum):
     UNVERIFIED = "unverified"
 
 
+class CandidateReviewStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class SourceType(StrEnum):
     OFFICIAL = "official"
     EXCHANGE = "exchange"
@@ -137,6 +143,8 @@ class AtomicFact:
     raw_snapshot_path: str
     derived_from_fact_ids: tuple[str, ...] = field(default_factory=tuple)
     used_in_sections: tuple[str, ...] = field(default_factory=tuple)
+    source_candidate_id: str | None = None
+    source_snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "derived_from_fact_ids", tuple(self.derived_from_fact_ids))
@@ -160,7 +168,49 @@ class AtomicFact:
             "raw_snapshot_path": self.raw_snapshot_path,
             "derived_from_fact_ids": list(self.derived_from_fact_ids),
             "used_in_sections": list(self.used_in_sections),
+            "source_candidate_id": self.source_candidate_id,
+            "source_snapshot_id": self.source_snapshot_id,
         }
+
+
+@dataclass(frozen=True)
+class EvidenceCandidate:
+    candidate_id: str
+    run_id: str
+    snapshot_id: str
+    module: str
+    title: str
+    detail_url: str
+    published_at: datetime | None
+    excerpt: str
+    suggested_classification: FactClassification
+    created_at: datetime
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "candidate_id": self.candidate_id,
+            "run_id": self.run_id,
+            "snapshot_id": self.snapshot_id,
+            "module": self.module,
+            "title": self.title,
+            "detail_url": self.detail_url,
+            "published_at": self.published_at.isoformat() if self.published_at else None,
+            "excerpt": self.excerpt,
+            "suggested_classification": self.suggested_classification.value,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class CandidateReviewEvent:
+    event_id: int
+    candidate_id: str
+    from_status: CandidateReviewStatus | None
+    to_status: CandidateReviewStatus
+    reviewed_at: datetime
+    reviewer_id: str | None
+    note: str
+    approved_fact_id: str | None = None
 
 
 @dataclass(frozen=True)
