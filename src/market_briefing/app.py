@@ -19,6 +19,7 @@ from market_briefing.domain import FeedbackEntry, RawSnapshot, Report, ReportTyp
 from market_briefing.feedback import ALLOWED_FEEDBACK_TAGS, summarize_feedback, validate_feedback_entry
 from market_briefing.labels import (
     confidence_label,
+    coverage_status_label,
     fact_classification_label,
     feedback_tag_label,
     feedback_tags_label,
@@ -62,6 +63,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     templates.env.filters["fact_classification_label"] = fact_classification_label
     templates.env.filters["source_type_label"] = source_type_label
     templates.env.filters["confidence_label"] = confidence_label
+    templates.env.filters["coverage_status_label"] = coverage_status_label
     templates.env.filters["status_label"] = status_label
     templates.env.filters["module_label"] = module_label
     templates.env.filters["section_label"] = section_label
@@ -82,6 +84,12 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         latest_facts = (
             briefing_store.list_facts(review_report.run_id) if review_report else []
         )
+        review_warnings = (
+            briefing_store.list_run_warnings(review_report.run_id) if review_report else []
+        )
+        review_coverage = (
+            briefing_store.list_module_coverage(review_report.run_id) if review_report else []
+        )
         return templates.TemplateResponse(
             request,
             "dashboard.html",
@@ -90,6 +98,8 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                 "review_report": review_report,
                 "reports": reports,
                 "latest_facts": latest_facts,
+                "run_warnings": review_warnings,
+                "module_coverage": review_coverage,
                 "feedback_summary": summarize_feedback(latest_feedback),
                 "report_types": list(ReportType),
                 "default_report_date": _default_report_date(),
@@ -164,10 +174,19 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         facts = briefing_store.list_facts(report.run_id)
         snapshots = briefing_store.list_snapshots(report.run_id)
         feedback = briefing_store.list_feedback(report.report_id)
+        run_warnings = briefing_store.list_run_warnings(report.run_id)
+        module_coverage = briefing_store.list_module_coverage(report.run_id)
         return templates.TemplateResponse(
             request,
             "report.html",
-            _report_template_context(report, facts, snapshots, feedback),
+            _report_template_context(
+                report,
+                facts,
+                snapshots,
+                feedback,
+                run_warnings=run_warnings,
+                module_coverage=module_coverage,
+            ),
         )
 
     @app.post("/reports/{report_id}/feedback")
@@ -205,6 +224,8 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
             facts = briefing_store.list_facts(report.run_id)
             snapshots = briefing_store.list_snapshots(report.run_id)
             feedback = briefing_store.list_feedback(report.report_id)
+            run_warnings = briefing_store.list_run_warnings(report.run_id)
+            module_coverage = briefing_store.list_module_coverage(report.run_id)
             return templates.TemplateResponse(
                 request,
                 "report.html",
@@ -220,6 +241,8 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                         "tags": list(tags or []),
                         "note": entry.note,
                     },
+                    run_warnings=run_warnings,
+                    module_coverage=module_coverage,
                 ),
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
@@ -254,6 +277,8 @@ def _report_template_context(
     feedback: list[FeedbackEntry],
     feedback_errors: list[dict[str, str]] | None = None,
     feedback_form: dict[str, object] | None = None,
+    run_warnings: list[object] | None = None,
+    module_coverage: list[object] | None = None,
 ) -> dict[str, object]:
     return {
         "report": report,
@@ -265,6 +290,8 @@ def _report_template_context(
         "feedback_tags": sorted(ALLOWED_FEEDBACK_TAGS),
         "feedback_errors": feedback_errors or [],
         "feedback_form": feedback_form or {},
+        "run_warnings": run_warnings or [],
+        "module_coverage": module_coverage or [],
     }
 
 
