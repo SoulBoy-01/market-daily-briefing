@@ -408,3 +408,19 @@ def test_real_publication_requires_inference_to_derive_from_current_facts():
     assert opinion_root.errors == [
         "real inference fact-inference derives from non-FACT fact_id fact-source"
     ]
+
+
+def test_real_publication_rejects_inference_derived_from_another_run():
+    source = replace(_fact("fact-source", "上证指数收涨。"), run_id="other-run")
+    inference = _fact(
+        "fact-inference",
+        "市场情绪可能改善。",
+        FactClassification.INFERENCE,
+        derived_from_fact_ids=(source.fact_id,),
+    )
+
+    result = validate_real_publishable_facts([source, inference])
+
+    assert result.errors == [
+        "real inference fact-inference derives from different run fact_id fact-source"
+    ]

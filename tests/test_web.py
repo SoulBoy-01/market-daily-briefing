@@ -204,6 +204,18 @@ def test_report_blocks_display_when_published_snapshot_is_tampered(tmp_path):
     assert "审计完整性校验失败" in response.text
 
 
+def test_dashboard_blocks_preview_when_published_snapshot_is_tampered(tmp_path):
+    store, client = _store_and_client(tmp_path, raise_server_exceptions=False)
+    _run_fixture(client)
+    snapshot = store.list_snapshots("web-after-close-001")[0]
+    Path(snapshot.raw_path).write_text("tampered", encoding="utf-8")
+
+    response = client.get("/")
+
+    assert response.status_code == 409
+    assert "审计完整性校验失败" in response.text
+
+
 def test_dashboard_rejects_duplicate_run_with_chinese_conflict(tmp_path):
     client = _client(tmp_path, raise_server_exceptions=False)
 

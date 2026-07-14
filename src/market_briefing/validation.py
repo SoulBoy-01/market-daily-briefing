@@ -96,6 +96,11 @@ def validate_real_publishable_facts(facts: list[AtomicFact]) -> ValidationResult
                     f"real inference {fact.fact_id} derives from missing fact_id "
                     f"{derived_fact_id}"
                 )
+            elif derived_fact.run_id != fact.run_id:
+                errors.append(
+                    f"real inference {fact.fact_id} derives from different run fact_id "
+                    f"{derived_fact_id}"
+                )
             elif derived_fact.classification != FactClassification.FACT:
                 errors.append(
                     f"real inference {fact.fact_id} derives from non-FACT fact_id "
