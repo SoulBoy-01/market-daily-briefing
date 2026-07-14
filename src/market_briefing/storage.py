@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +19,19 @@ from market_briefing.domain import (
     ReportSection,
     ReportType,
     Run,
+    RunEvent,
     RunStatus,
     SourceType,
+    can_transition_run,
 )
+
+
+class RunAlreadyExistsError(ValueError):
+    pass
+
+
+class InvalidRunTransitionError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -72,40 +82,148 @@ class BriefingStore:
     def initialize(self) -> None:
         with self.connection() as connection:
             connection.executescript(SCHEMA)
+            self._migrate_schema(connection)
 
-    def save_run(self, run: Run) -> None:
+    def _migrate_schema(self, connection: sqlite3.Connection) -> None:
+        run_columns = {
+            row["name"] for row in connection.execute("pragma table_info(runs)").fetchall()
+        }
+        if "supersedes_run_id" not in run_columns:
+            connection.execute("alter table runs add column supersedes_run_id text")
+        connection.execute(
+            """
+            insert into run_events (run_id, from_status, to_status, created_at)
+            select runs.run_id, null, runs.status, coalesce(runs.completed_at, runs.created_at)
+            from runs
+            where not exists (
+                select 1 from run_events where run_events.run_id = runs.run_id
+            )
+            """
+        )
+
+    def create_run(self, run: Run) -> None:
+        try:
+            with self.connection() as connection:
+                connection.execute(
+                    """
+                    insert into runs (
+                        run_id, report_date, report_type, enabled_modules, status,
+                        created_at, started_at, completed_at, warning_count, error_message,
+                        supersedes_run_id
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    self._run_values(run),
+                )
+                connection.execute(
+                    """
+                    insert into run_events (run_id, from_status, to_status, created_at)
+                    values (?, ?, ?, ?)
+                    """,
+                    (run.run_id, None, run.status.value, run.created_at.isoformat()),
+                )
+        except sqlite3.IntegrityError as exc:
+            if "runs.run_id" in str(exc):
+                raise RunAlreadyExistsError(run.run_id) from exc
+            raise
+
+    def transition_run(
+        self,
+        run_id: str,
+        target_status: RunStatus,
+        *,
+        warning_count: int | None = None,
+        error_message: str | None = None,
+    ) -> Run:
+        now = datetime.now(timezone.utc)
         with self.connection() as connection:
+            connection.execute("begin immediate")
+            row = connection.execute("select * from runs where run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            current_status = RunStatus(row["status"])
+            if not can_transition_run(current_status, target_status):
+                raise InvalidRunTransitionError(
+                    f"cannot transition run {run_id} from {current_status.value} "
+                    f"to {target_status.value}"
+                )
+            started_at = row["started_at"]
+            completed_at = row["completed_at"]
+            if target_status == RunStatus.RUNNING and started_at is None:
+                started_at = now.isoformat()
+            if target_status in {
+                RunStatus.COMPLETED,
+                RunStatus.COMPLETED_WITH_WARNINGS,
+                RunStatus.FAILED,
+            }:
+                completed_at = now.isoformat()
+            next_warning_count = (
+                row["warning_count"] if warning_count is None else warning_count
+            )
+            next_error_message = row["error_message"] if error_message is None else error_message
             connection.execute(
                 """
-                insert into runs (
-                    run_id, report_date, report_type, enabled_modules, status,
-                    created_at, started_at, completed_at, warning_count, error_message
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(run_id) do update set
-                    report_date=excluded.report_date,
-                    report_type=excluded.report_type,
-                    enabled_modules=excluded.enabled_modules,
-                    status=excluded.status,
-                    created_at=excluded.created_at,
-                    started_at=excluded.started_at,
-                    completed_at=excluded.completed_at,
-                    warning_count=excluded.warning_count,
-                    error_message=excluded.error_message
+                update runs
+                set status = ?, started_at = ?, completed_at = ?,
+                    warning_count = ?, error_message = ?
+                where run_id = ?
                 """,
                 (
-                    run.run_id,
-                    run.report_date,
-                    run.report_type.value,
-                    _to_json(list(run.enabled_modules)),
-                    run.status.value,
-                    run.created_at.isoformat(),
-                    run.started_at.isoformat() if run.started_at else None,
-                    run.completed_at.isoformat() if run.completed_at else None,
-                    run.warning_count,
-                    run.error_message,
+                    target_status.value,
+                    started_at,
+                    completed_at,
+                    next_warning_count,
+                    next_error_message,
+                    run_id,
                 ),
             )
+            connection.execute(
+                """
+                insert into run_events (run_id, from_status, to_status, created_at)
+                values (?, ?, ?, ?)
+                """,
+                (run_id, current_status.value, target_status.value, now.isoformat()),
+            )
+        run = self.get_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        return run
+
+    def list_run_events(self, run_id: str) -> list[RunEvent]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "select * from run_events where run_id = ? order by event_id",
+                (run_id,),
+            ).fetchall()
+        return [
+            RunEvent(
+                event_id=row["event_id"],
+                run_id=row["run_id"],
+                from_status=(RunStatus(row["from_status"]) if row["from_status"] else None),
+                to_status=RunStatus(row["to_status"]),
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def save_run(self, run: Run) -> None:
+        self.create_run(run)
+
+    @staticmethod
+    def _run_values(run: Run) -> tuple[Any, ...]:
+        return (
+            run.run_id,
+            run.report_date,
+            run.report_type.value,
+            _to_json(list(run.enabled_modules)),
+            run.status.value,
+            run.created_at.isoformat(),
+            run.started_at.isoformat() if run.started_at else None,
+            run.completed_at.isoformat() if run.completed_at else None,
+            run.warning_count,
+            run.error_message,
+            run.supersedes_run_id,
+        )
 
     def get_run(self, run_id: str) -> Run | None:
         with self.connection() as connection:
@@ -125,6 +243,7 @@ class BriefingStore:
             ),
             warning_count=row["warning_count"],
             error_message=row["error_message"],
+            supersedes_run_id=row["supersedes_run_id"],
         )
 
     def save_snapshot(self, snapshot: RawSnapshot) -> None:
@@ -437,8 +556,20 @@ create table if not exists runs (
     started_at text,
     completed_at text,
     warning_count integer not null default 0,
-    error_message text
+    error_message text,
+    supersedes_run_id text
 );
+
+create table if not exists run_events (
+    event_id integer primary key autoincrement,
+    run_id text not null,
+    from_status text,
+    to_status text not null,
+    created_at text not null
+);
+
+create index if not exists idx_run_events_run_id
+on run_events (run_id, event_id);
 
 create table if not exists source_snapshots (
     snapshot_id text primary key,

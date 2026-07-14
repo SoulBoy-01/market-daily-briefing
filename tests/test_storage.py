@@ -13,9 +13,15 @@ from market_briefing.domain import (
     ReportSection,
     ReportType,
     Run,
+    RunStatus,
     SourceType,
 )
-from market_briefing.storage import BriefingStore, build_report_paths
+from market_briefing.storage import (
+    BriefingStore,
+    InvalidRunTransitionError,
+    RunAlreadyExistsError,
+    build_report_paths,
+)
 
 
 class TrackingConnection(sqlite3.Connection):
@@ -51,6 +57,118 @@ def test_store_initializes_schema_and_round_trips_run(tmp_path):
     assert loaded.run_id == "run-001"
     assert loaded.report_type == ReportType.AFTER_CLOSE
     assert loaded.enabled_modules == ("market_indices",)
+
+
+def test_create_run_is_insert_only_and_records_initial_event(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-unique",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+
+    store.create_run(run)
+
+    with pytest.raises(RunAlreadyExistsError, match="run-unique"):
+        store.create_run(run)
+    events = store.list_run_events("run-unique")
+    assert [(event.from_status, event.to_status) for event in events] == [
+        (None, RunStatus.CREATED)
+    ]
+
+
+def test_transition_run_updates_projection_and_appends_ordered_events(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-transitions",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+
+    running = store.transition_run("run-transitions", RunStatus.RUNNING)
+    completed = store.transition_run("run-transitions", RunStatus.COMPLETED)
+
+    assert running.status == RunStatus.RUNNING
+    assert running.started_at is not None
+    assert completed.status == RunStatus.COMPLETED
+    assert completed.completed_at is not None
+    assert [event.to_status for event in store.list_run_events("run-transitions")] == [
+        RunStatus.CREATED,
+        RunStatus.RUNNING,
+        RunStatus.COMPLETED,
+    ]
+
+
+def test_transition_run_rejects_skips_and_terminal_mutation(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-invalid-transition",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+
+    with pytest.raises(InvalidRunTransitionError):
+        store.transition_run("run-invalid-transition", RunStatus.COMPLETED)
+    store.transition_run("run-invalid-transition", RunStatus.RUNNING)
+    store.transition_run("run-invalid-transition", RunStatus.FAILED)
+    with pytest.raises(InvalidRunTransitionError):
+        store.transition_run("run-invalid-transition", RunStatus.RUNNING)
+
+
+def test_initialize_upgrades_legacy_runs_and_backfills_audit_event(tmp_path):
+    database_path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            create table runs (
+                run_id text primary key,
+                report_date text not null,
+                report_type text not null,
+                enabled_modules text not null,
+                status text not null,
+                created_at text not null,
+                started_at text,
+                completed_at text,
+                warning_count integer not null default 0,
+                error_message text
+            )
+            """
+        )
+        connection.execute(
+            """
+            insert into runs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-run",
+                "2026-07-01",
+                "after_close",
+                '["market_indices"]',
+                "completed",
+                "2026-07-01T07:00:00+00:00",
+                "2026-07-01T07:00:01+00:00",
+                "2026-07-01T07:05:00+00:00",
+                0,
+                None,
+            ),
+        )
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    run = store.get_run("legacy-run")
+    assert run is not None
+    assert run.supersedes_run_id is None
+    assert [event.to_status for event in store.list_run_events("legacy-run")] == [
+        RunStatus.COMPLETED
+    ]
 
 
 def test_store_closes_connections_after_operations(tmp_path):
