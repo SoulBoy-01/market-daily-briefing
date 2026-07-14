@@ -171,6 +171,50 @@ def test_initialize_upgrades_legacy_runs_and_backfills_audit_event(tmp_path):
     ]
 
 
+def test_initialize_upgrades_legacy_snapshot_columns(tmp_path):
+    database_path = tmp_path / "legacy-snapshots.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            create table source_snapshots (
+                snapshot_id text primary key,
+                run_id text not null,
+                module text not null,
+                source_name text not null,
+                source_url text not null,
+                source_type text not null,
+                fetched_at text not null,
+                content_type text not null,
+                raw_path text not null,
+                metadata text not null
+            )
+            """
+        )
+        connection.execute(
+            "insert into source_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-snapshot",
+                "legacy-run",
+                "market_indices",
+                "Legacy Provider",
+                "fixture://legacy",
+                "data_api",
+                "2026-07-01T07:00:00+00:00",
+                "application/json",
+                "legacy.json",
+                "{}",
+            ),
+        )
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    snapshot = store.list_snapshots("legacy-run")[0]
+    assert snapshot.content_sha256 == ""
+    assert snapshot.provider_name == "Legacy Provider"
+    assert snapshot.license_ref is None
+
+
 def test_store_closes_connections_after_operations(tmp_path):
     database_path = tmp_path / "briefing.sqlite"
     store = TrackingStore(database_path)
@@ -204,6 +248,9 @@ def test_store_round_trips_snapshot_fact_and_report(tmp_path):
         fetched_at=fetched_at,
         content_type="application/json",
         raw_path="data/raw/2026-07-02/run-001/indices.json",
+        content_sha256="b" * 64,
+        provider_name="Fixture",
+        license_ref="fixture:test-data",
         metadata={"rows": 4, "symbols": ["000001.SH"]},
     )
     fact = AtomicFact(
@@ -261,6 +308,9 @@ def test_store_round_trips_snapshot_fact_and_report(tmp_path):
     loaded_report = store.get_report("report-001")
 
     assert loaded_snapshot.snapshot_id == "snapshot-001"
+    assert loaded_snapshot.content_sha256 == "b" * 64
+    assert loaded_snapshot.provider_name == "Fixture"
+    assert loaded_snapshot.license_ref == "fixture:test-data"
     assert loaded_snapshot.metadata["symbols"] == ("000001.SH",)
     assert loaded_fact.fact_id == "fact-001"
     assert loaded_fact.derived_from_fact_ids == ("source-fact-001",)

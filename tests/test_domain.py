@@ -31,6 +31,9 @@ def test_raw_snapshot_can_be_serialized():
         fetched_at=datetime(2026, 7, 2, 15, 10, tzinfo=timezone.utc),
         content_type="application/json",
         raw_path="data/raw/2026-07-02/run-001/indices.json",
+        content_sha256="a" * 64,
+        provider_name="Fixture Market Data",
+        license_ref="fixture:test-data",
         metadata=metadata,
     )
     metadata["row_count"] = 99
@@ -41,6 +44,9 @@ def test_raw_snapshot_can_be_serialized():
     assert payload["snapshot_id"] == "snapshot-001"
     assert payload["source_type"] == "data_api"
     assert payload["fetched_at"] == "2026-07-02T15:10:00+00:00"
+    assert payload["content_sha256"] == "a" * 64
+    assert payload["provider_name"] == "Fixture Market Data"
+    assert payload["license_ref"] == "fixture:test-data"
     assert payload["metadata"] == {"row_count": 3, "symbols": ["000001.SH"]}
     assert isinstance(snapshot.metadata, MappingProxyType)
     with pytest.raises(TypeError):

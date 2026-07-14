@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from market_briefing.audit import verify_snapshot_hash
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.domain import FactClassification, ReportType, SourceType
 
@@ -87,6 +88,11 @@ def test_fixture_collector_writes_raw_snapshots_and_facts(tmp_path):
     assert result.snapshots[0].source_type == SourceType.DATA_API
     assert result.snapshots[0].metadata["fact_count"] == 2
     assert result.snapshots[0].metadata["fixture_path"] == "tests/fixtures/after_close_sources.json"
+    assert verify_snapshot_hash(
+        Path(result.snapshots[0].raw_path), result.snapshots[0].content_sha256
+    )
+    assert result.snapshots[0].provider_name == "Fixture Market Data"
+    assert result.snapshots[0].license_ref == "fixture:test-data"
     assert Path(result.snapshots[0].raw_path).exists()
     assert Path(result.snapshots[0].raw_path).name == "001-market_indices.json"
     assert json.loads(Path(result.snapshots[0].raw_path).read_text(encoding="utf-8")) == {

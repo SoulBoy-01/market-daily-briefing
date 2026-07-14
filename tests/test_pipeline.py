@@ -66,6 +66,42 @@ def _bad_fixture(tmp_path):
     return fixture_path
 
 
+def _partially_unreadable_fixture(tmp_path):
+    fixture_path = tmp_path / "partially_unreadable_sources.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "report_date": "2026-07-02",
+                "report_type": "after_close",
+                "sources": [
+                    {
+                        "module": "market_indices",
+                        "source_name": "Valid First Source",
+                        "source_url": "fixture://valid/first",
+                        "source_type": "data_api",
+                        "published_at": "2026-07-02T15:05:00+08:00",
+                        "content_type": "application/json",
+                        "content": {"value": 1},
+                        "facts": [],
+                    },
+                    {
+                        "module": "policy_regulation",
+                        "source_name": "Unsupported Second Source",
+                        "source_url": "fixture://unsupported/second",
+                        "source_type": "official",
+                        "published_at": "2026-07-02T15:10:00+08:00",
+                        "content_type": "text/plain",
+                        "content": "unsupported",
+                        "facts": [],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return fixture_path
+
+
 def _config_file(tmp_path):
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -114,6 +150,14 @@ def test_fixture_pipeline_generates_auditable_after_close_report(tmp_path):
     assert Path(result.report.fact_ledger_path).exists()
     assert len(store.list_snapshots("run-after-close-001")) == 3
     assert len(store.list_facts("run-after-close-001")) == 4
+    snapshots = store.list_snapshots("run-after-close-001")
+    assert all(Path(snapshot.raw_path).is_relative_to(config.raw_dir) for snapshot in snapshots)
+    facts = store.list_facts("run-after-close-001")
+    assert all(Path(fact.raw_snapshot_path).is_relative_to(config.raw_dir) for fact in facts)
+    assert all(Path(fact.raw_snapshot_path).is_file() for fact in facts)
+    assert not (
+        config.effective_staging_dir / "2026-07-02" / "run-after-close-001"
+    ).exists()
     assert "A股盘后简报 2026-07-02" in Path(result.report.markdown_path).read_text(
         encoding="utf-8"
     )
@@ -411,8 +455,47 @@ def test_fixture_pipeline_marks_validation_failure_and_returns_errors(tmp_path):
     assert result.report is None
     assert store.list_facts("run-warning-001") == []
     assert store.list_snapshots("run-warning-001") == []
+    assert not (config.raw_dir / "2026-07-02" / "run-warning-001").exists()
+    diagnostics_dir = (
+        config.effective_diagnostics_dir / "2026-07-02" / "run-warning-001"
+    )
+    assert diagnostics_dir.is_dir()
+    assert [path.name for path in diagnostics_dir.iterdir()] == ["001-market_indices.json"]
+    assert not (
+        config.effective_staging_dir / "2026-07-02" / "run-warning-001"
+    ).exists()
     with pytest.raises(KeyError):
         store.get_report("report-run-warning-001")
+
+
+def test_fixture_pipeline_moves_partial_collection_to_diagnostics_on_error(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+
+    with pytest.raises(ValueError, match="Unsupported fixture content type"):
+        run_fixture_pipeline(
+            PipelineRequest(
+                run_id="run-collection-error",
+                report_date="2026-07-02",
+                report_type=ReportType.AFTER_CLOSE,
+                fixture_path=_partially_unreadable_fixture(tmp_path),
+            ),
+            config=config,
+            store=store,
+        )
+
+    run = store.get_run("run-collection-error")
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.error_message == "Unsupported fixture content type: text/plain"
+    assert not (
+        config.effective_staging_dir / "2026-07-02" / "run-collection-error"
+    ).exists()
+    diagnostics_dir = (
+        config.effective_diagnostics_dir / "2026-07-02" / "run-collection-error"
+    )
+    assert [path.name for path in diagnostics_dir.iterdir()] == ["001-market_indices.json"]
 
 
 def test_fixture_pipeline_generates_pre_open_report(tmp_path):

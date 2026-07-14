@@ -90,6 +90,23 @@ class BriefingStore:
         }
         if "supersedes_run_id" not in run_columns:
             connection.execute("alter table runs add column supersedes_run_id text")
+        snapshot_columns = {
+            row["name"]
+            for row in connection.execute("pragma table_info(source_snapshots)").fetchall()
+        }
+        if "content_sha256" not in snapshot_columns:
+            connection.execute(
+                "alter table source_snapshots add column content_sha256 text not null default ''"
+            )
+        if "provider_name" not in snapshot_columns:
+            connection.execute(
+                "alter table source_snapshots add column provider_name text not null default ''"
+            )
+            connection.execute(
+                "update source_snapshots set provider_name = source_name where provider_name = ''"
+            )
+        if "license_ref" not in snapshot_columns:
+            connection.execute("alter table source_snapshots add column license_ref text")
         connection.execute(
             """
             insert into run_events (run_id, from_status, to_status, created_at)
@@ -253,9 +270,10 @@ class BriefingStore:
                 """
                 insert into source_snapshots (
                     snapshot_id, run_id, module, source_name, source_url, source_type,
-                    fetched_at, content_type, raw_path, metadata
+                    fetched_at, content_type, raw_path, content_sha256, provider_name,
+                    license_ref, metadata
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(snapshot_id) do update set
                     run_id=excluded.run_id,
                     module=excluded.module,
@@ -265,6 +283,9 @@ class BriefingStore:
                     fetched_at=excluded.fetched_at,
                     content_type=excluded.content_type,
                     raw_path=excluded.raw_path,
+                    content_sha256=excluded.content_sha256,
+                    provider_name=excluded.provider_name,
+                    license_ref=excluded.license_ref,
                     metadata=excluded.metadata
                 """,
                 (
@@ -277,6 +298,9 @@ class BriefingStore:
                     record["fetched_at"],
                     record["content_type"],
                     record["raw_path"],
+                    record["content_sha256"],
+                    record["provider_name"],
+                    record["license_ref"],
                     _to_json(record["metadata"]),
                 ),
             )
@@ -298,6 +322,9 @@ class BriefingStore:
                 fetched_at=datetime.fromisoformat(row["fetched_at"]),
                 content_type=row["content_type"],
                 raw_path=row["raw_path"],
+                content_sha256=row["content_sha256"],
+                provider_name=row["provider_name"],
+                license_ref=row["license_ref"],
                 metadata=json.loads(row["metadata"]),
             )
             for row in rows
@@ -581,6 +608,9 @@ create table if not exists source_snapshots (
     fetched_at text not null,
     content_type text not null,
     raw_path text not null,
+    content_sha256 text not null default '',
+    provider_name text not null default '',
+    license_ref text,
     metadata text not null
 );
 

@@ -315,6 +315,10 @@ def load_default_app_config() -> AppConfig:
         config,
         database_path=_resolve_default_config_path(config.database_path, project_root),
         raw_dir=_resolve_default_config_path(config.raw_dir, project_root),
+        staging_dir=_resolve_default_config_path(config.effective_staging_dir, project_root),
+        diagnostics_dir=_resolve_default_config_path(
+            config.effective_diagnostics_dir, project_root
+        ),
         reports_dir=_resolve_default_config_path(config.reports_dir, project_root),
     )
 
