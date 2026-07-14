@@ -16,10 +16,20 @@ class AppConfig:
     reports_dir: Path
     generation_provider: str
     report_modules: dict[ReportType, dict[str, bool]]
+    staging_dir: Path | None = None
+    diagnostics_dir: Path | None = None
 
     def enabled_modules(self, report_type: ReportType) -> list[str]:
         modules = self.report_modules.get(report_type, {})
         return [name for name, enabled in modules.items() if enabled]
+
+    @property
+    def effective_staging_dir(self) -> Path:
+        return self.staging_dir or self.raw_dir.parent / "staging"
+
+    @property
+    def effective_diagnostics_dir(self) -> Path:
+        return self.diagnostics_dir or self.raw_dir.parent / "diagnostics"
 
 
 def load_config(path: Path) -> AppConfig:
@@ -41,4 +51,10 @@ def load_config(path: Path) -> AppConfig:
         reports_dir=Path(app_payload["reports_dir"]),
         generation_provider=str(generation_payload.get("provider", "template")),
         report_modules=report_modules,
+        staging_dir=(Path(app_payload["staging_dir"]) if app_payload.get("staging_dir") else None),
+        diagnostics_dir=(
+            Path(app_payload["diagnostics_dir"])
+            if app_payload.get("diagnostics_dir")
+            else None
+        ),
     )

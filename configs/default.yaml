@@ -1,6 +1,8 @@
 app:
   database_path: data/market_briefing.sqlite
   raw_dir: data/raw
+  staging_dir: data/staging
+  diagnostics_dir: data/diagnostics
   reports_dir: reports
   default_report_date_timezone: Asia/Shanghai
 

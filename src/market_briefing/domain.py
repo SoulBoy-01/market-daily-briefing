@@ -93,6 +93,9 @@ class RawSnapshot:
     fetched_at: datetime
     content_type: str
     raw_path: str
+    content_sha256: str = ""
+    provider_name: str = ""
+    license_ref: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -109,6 +112,9 @@ class RawSnapshot:
             "fetched_at": self.fetched_at.isoformat(),
             "content_type": self.content_type,
             "raw_path": self.raw_path,
+            "content_sha256": self.content_sha256,
+            "provider_name": self.provider_name,
+            "license_ref": self.license_ref,
             "metadata": _to_record_value(self.metadata),
         }
 

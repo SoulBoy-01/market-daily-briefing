@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from market_briefing.audit import SnapshotFile, run_directory, write_snapshot_text
 from market_briefing.collectors.base import CollectionResult
 from market_briefing.domain import (
     AtomicFact,
@@ -42,13 +43,13 @@ class MarketDataCollector:
 
         if "market_indices" in enabled_module_set:
             rows = self.client.index_spot()
-            raw_path = _write_json(raw_dir, report_date, run_id, "market_indices", rows)
+            snapshot_file = _write_json(raw_dir, report_date, run_id, "market_indices", rows)
             snapshots.append(
                 _snapshot(
                     run_id=run_id,
                     module="market_indices",
                     source_url="akshare://index_spot",
-                    raw_path=raw_path,
+                    snapshot_file=snapshot_file,
                     fetched_at=fetched_at,
                     row_count=len(rows),
                 )
@@ -60,7 +61,7 @@ class MarketDataCollector:
                     report_type=report_type,
                     row=row,
                     row_index=index,
-                    raw_path=raw_path,
+                    raw_path=snapshot_file.path,
                     fetched_at=fetched_at,
                 )
                 for index, row in enumerate(rows, start=1)
@@ -68,13 +69,13 @@ class MarketDataCollector:
 
         if "sector_moves" in enabled_module_set:
             rows = self.client.sector_spot()
-            raw_path = _write_json(raw_dir, report_date, run_id, "sector_moves", rows)
+            snapshot_file = _write_json(raw_dir, report_date, run_id, "sector_moves", rows)
             snapshots.append(
                 _snapshot(
                     run_id=run_id,
                     module="sector_moves",
                     source_url="akshare://sector_spot",
-                    raw_path=raw_path,
+                    snapshot_file=snapshot_file,
                     fetched_at=fetched_at,
                     row_count=len(rows),
                 )
@@ -86,7 +87,7 @@ class MarketDataCollector:
                     report_type=report_type,
                     row=row,
                     row_index=index,
-                    raw_path=raw_path,
+                    raw_path=snapshot_file.path,
                     fetched_at=fetched_at,
                 )
                 for index, row in enumerate(rows, start=1)
@@ -101,18 +102,16 @@ def _write_json(
     run_id: str,
     module: str,
     rows: list[dict[str, Any]],
-) -> Path:
-    raw_path = raw_dir / report_date / run_id / f"{module}.json"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    return raw_path
+) -> SnapshotFile:
+    raw_path = run_directory(raw_dir, report_date, run_id) / f"{module}.json"
+    return write_snapshot_text(raw_path, json.dumps(rows, ensure_ascii=False, indent=2))
 
 
 def _snapshot(
     run_id: str,
     module: str,
     source_url: str,
-    raw_path: Path,
+    snapshot_file: SnapshotFile,
     fetched_at: datetime,
     row_count: int,
 ) -> RawSnapshot:
@@ -125,7 +124,10 @@ def _snapshot(
         source_type=SourceType.DATA_API,
         fetched_at=fetched_at,
         content_type="application/json",
-        raw_path=str(raw_path),
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="AkShare adapter",
+        license_ref=None,
         metadata={"rows": row_count},
     )
 

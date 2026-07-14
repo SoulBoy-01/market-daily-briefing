@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from market_briefing.audit import move_run_directory, rebase_audit_path
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.config import AppConfig, load_config
 from market_briefing.domain import AtomicFact, Report, ReportType, Run, RunStatus
@@ -53,13 +54,27 @@ def run_fixture_pipeline(
     store.create_run(run)
     store.transition_run(run.run_id, RunStatus.RUNNING)
 
-    collection = FixtureCollector(request.fixture_path).collect(
-        run_id=request.run_id,
-        report_date=request.report_date,
-        report_type=request.report_type,
-        enabled_modules=enabled_modules,
-        raw_dir=config.raw_dir,
-    )
+    try:
+        collection = FixtureCollector(request.fixture_path).collect(
+            run_id=request.run_id,
+            report_date=request.report_date,
+            report_type=request.report_type,
+            enabled_modules=enabled_modules,
+            raw_dir=config.effective_staging_dir,
+        )
+    except Exception as exc:
+        move_run_directory(
+            config.effective_staging_dir,
+            config.effective_diagnostics_dir,
+            request.report_date,
+            request.run_id,
+        )
+        store.transition_run(
+            run.run_id,
+            RunStatus.FAILED,
+            error_message=str(exc),
+        )
+        raise
     facts = _scope_facts_to_run(collection.facts, request.run_id)
 
     paths = build_report_paths(
@@ -88,6 +103,12 @@ def run_fixture_pipeline(
     validation = validate_report_sections(report.sections, facts)
 
     if not validation.ok:
+        move_run_directory(
+            config.effective_staging_dir,
+            config.effective_diagnostics_dir,
+            request.report_date,
+            request.run_id,
+        )
         store.transition_run(
             run.run_id,
             RunStatus.FAILED,
@@ -95,8 +116,40 @@ def run_fixture_pipeline(
         )
         return PipelineResult(report=None, validation_errors=validation.errors)
 
+    moved = move_run_directory(
+        config.effective_staging_dir,
+        config.raw_dir,
+        request.report_date,
+        request.run_id,
+    )
+    if moved is None:
+        raise RuntimeError(f"run {request.run_id} produced no staging directory")
+    source_run_dir, destination_run_dir = moved
+    snapshots = [
+        replace(
+            snapshot,
+            raw_path=rebase_audit_path(
+                snapshot.raw_path,
+                source_run_dir,
+                destination_run_dir,
+            ),
+        )
+        for snapshot in collection.snapshots
+    ]
+    facts = [
+        replace(
+            fact,
+            raw_snapshot_path=rebase_audit_path(
+                fact.raw_snapshot_path,
+                source_run_dir,
+                destination_run_dir,
+            ),
+        )
+        for fact in facts
+    ]
+
     paths.report_dir.mkdir(parents=True, exist_ok=True)
-    for snapshot in collection.snapshots:
+    for snapshot in snapshots:
         store.save_snapshot(snapshot)
     store.save_facts(facts)
 

@@ -9,6 +9,8 @@ def test_load_default_config_contains_storage_paths_and_modules():
 
     assert config.database_path == Path("data/market_briefing.sqlite")
     assert config.raw_dir == Path("data/raw")
+    assert config.effective_staging_dir == Path("data/staging")
+    assert config.effective_diagnostics_dir == Path("data/diagnostics")
     assert config.reports_dir == Path("reports")
     assert config.generation_provider == "template"
     assert config.enabled_modules(ReportType.AFTER_CLOSE) == [
@@ -33,6 +35,8 @@ def test_module_can_be_disabled_in_yaml(tmp_path):
 app:
   database_path: data/test.sqlite
   raw_dir: data/raw
+  staging_dir: data/custom-staging
+  diagnostics_dir: data/custom-diagnostics
   reports_dir: reports
 generation:
   provider: template
@@ -52,3 +56,5 @@ report_types:
 
     assert config.enabled_modules(ReportType.AFTER_CLOSE) == ["market_indices"]
     assert config.enabled_modules(ReportType.PRE_OPEN_UPDATE) == ["overnight_context"]
+    assert config.effective_staging_dir == Path("data/custom-staging")
+    assert config.effective_diagnostics_dir == Path("data/custom-diagnostics")

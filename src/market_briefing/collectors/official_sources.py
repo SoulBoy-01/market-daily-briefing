@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 
+from market_briefing.audit import SnapshotFile, run_directory, write_snapshot_text
 from market_briefing.collectors.base import CollectionResult
 from market_briefing.domain import (
     AtomicFact,
@@ -50,7 +51,7 @@ class OfficialSourceCollector:
             response = self.client.get(target.source_url, timeout=15)
             response.raise_for_status()
 
-            raw_path = _write_html(
+            snapshot_file = _write_html(
                 raw_dir=raw_dir,
                 report_date=report_date,
                 run_id=run_id,
@@ -70,7 +71,10 @@ class OfficialSourceCollector:
                     source_type=target.source_type,
                     fetched_at=fetched_at,
                     content_type="text/html",
-                    raw_path=str(raw_path),
+                    raw_path=str(snapshot_file.path),
+                    content_sha256=snapshot_file.content_sha256,
+                    provider_name=target.source_name,
+                    license_ref=None,
                     metadata={"title": title},
                 )
             )
@@ -89,7 +93,7 @@ class OfficialSourceCollector:
                     published_at=None,
                     fetched_at=fetched_at,
                     confidence="high",
-                    raw_snapshot_path=str(raw_path),
+                    raw_snapshot_path=str(snapshot_file.path),
                     used_in_sections=[target.module],
                 )
             )
@@ -127,11 +131,9 @@ def _write_html(
     module: str,
     source_index: int,
     html: str,
-) -> Path:
-    raw_path = raw_dir / report_date / run_id / f"{module}-{source_index:03d}.html"
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    raw_path.write_text(html, encoding="utf-8")
-    return raw_path
+) -> SnapshotFile:
+    raw_path = run_directory(raw_dir, report_date, run_id) / f"{module}-{source_index:03d}.html"
+    return write_snapshot_text(raw_path, html)
 
 
 def _extract_title_and_first_paragraph(html: str) -> tuple[str, str]:

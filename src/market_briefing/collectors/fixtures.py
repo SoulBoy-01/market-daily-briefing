@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from market_briefing.audit import SnapshotFile, run_directory, write_snapshot_text
 from market_briefing.collectors.base import CollectionResult
 from market_briefing.domain import (
     AtomicFact,
@@ -39,7 +40,7 @@ class FixtureCollector:
             if module not in enabled_module_set:
                 continue
 
-            raw_path = _write_raw_snapshot(
+            snapshot_file = _write_raw_snapshot(
                 raw_dir=raw_dir,
                 report_date=report_date,
                 run_id=run_id,
@@ -58,7 +59,10 @@ class FixtureCollector:
                 source_type=source_type,
                 fetched_at=fetched_at,
                 content_type=source["content_type"],
-                raw_path=str(raw_path),
+                raw_path=str(snapshot_file.path),
+                content_sha256=snapshot_file.content_sha256,
+                provider_name=source["source_name"],
+                license_ref="fixture:test-data",
                 metadata={
                     "fixture_path": self.fixture_path.as_posix(),
                     "fact_count": len(source.get("facts", [])),
@@ -83,7 +87,7 @@ class FixtureCollector:
                         published_at=published_at,
                         fetched_at=fetched_at,
                         confidence=fact_payload["confidence"],
-                        raw_snapshot_path=str(raw_path),
+                        raw_snapshot_path=str(snapshot_file.path),
                         derived_from_fact_ids=fact_payload.get("derived_from_fact_ids", []),
                         used_in_sections=fact_payload.get("used_in_sections", [module]),
                     )
@@ -100,13 +104,12 @@ def _write_raw_snapshot(
     module: str,
     content: Any,
     content_type: str,
-) -> Path:
-    module_dir = raw_dir / report_date / run_id
+) -> SnapshotFile:
+    module_dir = run_directory(raw_dir, report_date, run_id)
     module_dir.mkdir(parents=True, exist_ok=True)
     suffix = _raw_suffix(content_type)
     raw_path = module_dir / f"{source_index:03d}-{module}.{suffix}"
-    raw_path.write_text(_render_raw_content(content, content_type), encoding="utf-8")
-    return raw_path
+    return write_snapshot_text(raw_path, _render_raw_content(content, content_type))
 
 
 def _raw_suffix(content_type: str) -> str:

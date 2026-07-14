@@ -3,6 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from market_briefing.audit import verify_snapshot_hash
 from market_briefing.collectors.market_data import MarketDataCollector
 from market_briefing.collectors.official_sources import (
     OfficialSourceCollector,
@@ -41,6 +42,9 @@ def test_market_data_collector_normalizes_indices_and_sectors(tmp_path):
     assert result.facts[0].classification == FactClassification.FACT
     assert result.facts[0].source_type == SourceType.DATA_API
     assert Path(result.snapshots[0].raw_path).exists()
+    assert verify_snapshot_hash(
+        Path(result.snapshots[0].raw_path), result.snapshots[0].content_sha256
+    )
 
 
 def test_market_data_collector_fact_ids_are_isolated_by_run(tmp_path):
@@ -102,6 +106,9 @@ def test_official_source_collector_extracts_official_fact(tmp_path):
     assert len(result.facts) == 1
     assert result.facts[0].claim == "监管动态：交易所发布市场监管通报。"
     assert result.facts[0].source_type == SourceType.EXCHANGE
+    assert verify_snapshot_hash(
+        Path(result.snapshots[0].raw_path), result.snapshots[0].content_sha256
+    )
 
 
 def test_official_source_collector_fact_ids_are_isolated_by_run(tmp_path):
