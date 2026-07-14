@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from market_briefing.domain import (
@@ -8,7 +9,7 @@ from market_briefing.domain import (
     ReportType,
     SourceType,
 )
-from market_briefing.validation import validate_report_sections
+from market_briefing.validation import validate_real_publishable_facts, validate_report_sections
 
 
 def _fact(
@@ -363,3 +364,47 @@ def test_validation_allows_fact_with_derived_fact_ids():
 
     assert result.ok is True
     assert result.errors == []
+
+
+def test_real_publication_rejects_unverified_fact():
+    result = validate_real_publishable_facts(
+        [_fact("fact-unverified", "待确认内容。", FactClassification.UNVERIFIED)]
+    )
+
+    assert result.ok is False
+    assert result.errors == ["real publication rejects UNVERIFIED fact fact-unverified"]
+
+
+def test_real_publication_requires_inference_to_derive_from_current_facts():
+    facts = [
+        _fact("fact-source", "上证指数收涨。"),
+        _fact(
+            "fact-inference",
+            "市场情绪可能改善。",
+            FactClassification.INFERENCE,
+            derived_from_fact_ids=("fact-source",),
+        ),
+    ]
+
+    assert validate_real_publishable_facts(facts).ok is True
+
+    missing = validate_real_publishable_facts(
+        [replace(facts[1], derived_from_fact_ids=("fact-missing",))]
+    )
+    unrooted = validate_real_publishable_facts(
+        [replace(facts[1], derived_from_fact_ids=())]
+    )
+    opinion_root = validate_real_publishable_facts(
+        [
+            replace(facts[0], classification=FactClassification.OPINION),
+            facts[1],
+        ]
+    )
+
+    assert missing.errors == [
+        "real inference fact-inference derives from missing fact_id fact-missing"
+    ]
+    assert unrooted.errors == ["real inference fact-inference has no derived facts"]
+    assert opinion_root.errors == [
+        "real inference fact-inference derives from non-FACT fact_id fact-source"
+    ]

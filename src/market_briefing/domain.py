@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -88,6 +89,12 @@ class ModuleCoverageStatus(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
+class OfficialCheckStatus(StrEnum):
+    CHECKED_NO_UPDATES = "checked_no_updates"
+    CANDIDATES_FOUND = "candidates_found"
+    CHECK_FAILED = "check_failed"
+
+
 class SourceType(StrEnum):
     OFFICIAL = "official"
     EXCHANGE = "exchange"
@@ -131,6 +138,35 @@ class RawSnapshot:
             "license_ref": self.license_ref,
             "metadata": _to_record_value(self.metadata),
         }
+
+
+@dataclass(frozen=True)
+class MarketIndexRecord:
+    provider_id: str
+    trade_date: date
+    symbol: str
+    close: Decimal
+    change_pct: Decimal
+    evidence_id: str
+
+
+@dataclass(frozen=True)
+class MarketTemperatureRecord:
+    provider_id: str
+    trade_date: date
+    total_turnover_cny: Decimal
+    turnover_change_pct: Decimal
+    advancing_count: int
+    declining_count: int
+    evidence_id: str
+
+
+@dataclass(frozen=True)
+class SectorSnapshotRecord:
+    provider_id: str
+    trade_date: date
+    taxonomy: str
+    evidence_id: str
 
 
 @dataclass(frozen=True)
