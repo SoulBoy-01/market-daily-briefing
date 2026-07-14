@@ -12,6 +12,9 @@ from typing import Any
 from market_briefing.audit import verify_snapshot_hash
 from market_briefing.domain import (
     AtomicFact,
+    CandidateReviewEvent,
+    CandidateReviewStatus,
+    EvidenceCandidate,
     FactClassification,
     FactLine,
     FeedbackEntry,
@@ -40,6 +43,18 @@ class PublishedRecordExistsError(ValueError):
 
 
 class AuditIntegrityError(RuntimeError):
+    pass
+
+
+class CandidateAlreadyExistsError(ValueError):
+    pass
+
+
+class CandidateAlreadyReviewedError(ValueError):
+    pass
+
+
+class InvalidCandidateReviewError(ValueError):
     pass
 
 
@@ -116,6 +131,13 @@ class BriefingStore:
             )
         if "license_ref" not in snapshot_columns:
             connection.execute("alter table source_snapshots add column license_ref text")
+        fact_columns = {
+            row["name"] for row in connection.execute("pragma table_info(facts)").fetchall()
+        }
+        if "source_candidate_id" not in fact_columns:
+            connection.execute("alter table facts add column source_candidate_id text")
+        if "source_snapshot_id" not in fact_columns:
+            connection.execute("alter table facts add column source_snapshot_id text")
         connection.execute(
             """
             insert into run_events (run_id, from_status, to_status, created_at)
@@ -339,6 +361,198 @@ class BriefingStore:
             for row in rows
         ]
 
+    def save_candidate(self, candidate: EvidenceCandidate) -> None:
+        record = candidate.to_record()
+        try:
+            with self.connection() as connection:
+                connection.execute(
+                    """
+                    insert into evidence_candidates (
+                        candidate_id, run_id, snapshot_id, module, title, detail_url,
+                        published_at, excerpt, suggested_classification, created_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record["candidate_id"],
+                        record["run_id"],
+                        record["snapshot_id"],
+                        record["module"],
+                        record["title"],
+                        record["detail_url"],
+                        record["published_at"],
+                        record["excerpt"],
+                        record["suggested_classification"],
+                        record["created_at"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    insert into candidate_review_events (
+                        candidate_id, from_status, to_status, reviewed_at,
+                        reviewer_id, note, approved_fact_id
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate.candidate_id,
+                        None,
+                        CandidateReviewStatus.PENDING.value,
+                        candidate.created_at.isoformat(),
+                        None,
+                        "",
+                        None,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise CandidateAlreadyExistsError(candidate.candidate_id) from exc
+
+    def get_candidate(self, candidate_id: str) -> EvidenceCandidate:
+        with self.connection() as connection:
+            row = connection.execute(
+                "select * from evidence_candidates where candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(candidate_id)
+        return EvidenceCandidate(
+            candidate_id=row["candidate_id"],
+            run_id=row["run_id"],
+            snapshot_id=row["snapshot_id"],
+            module=row["module"],
+            title=row["title"],
+            detail_url=row["detail_url"],
+            published_at=(
+                datetime.fromisoformat(row["published_at"]) if row["published_at"] else None
+            ),
+            excerpt=row["excerpt"],
+            suggested_classification=FactClassification(row["suggested_classification"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def list_candidate_review_events(self, candidate_id: str) -> list[CandidateReviewEvent]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                select * from candidate_review_events
+                where candidate_id = ?
+                order by event_id
+                """,
+                (candidate_id,),
+            ).fetchall()
+        return [self._candidate_review_event_from_row(row) for row in rows]
+
+    def candidate_review_status(self, candidate_id: str) -> CandidateReviewStatus:
+        with self.connection() as connection:
+            candidate = connection.execute(
+                "select 1 from evidence_candidates where candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+            if candidate is None:
+                raise KeyError(candidate_id)
+            row = connection.execute(
+                """
+                select to_status from candidate_review_events
+                where candidate_id = ?
+                order by event_id desc
+                limit 1
+                """,
+                (candidate_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError(f"candidate {candidate_id} has no review event")
+        return CandidateReviewStatus(row["to_status"])
+
+    def review_candidate(
+        self,
+        candidate_id: str,
+        target_status: CandidateReviewStatus,
+        *,
+        reviewer_id: str,
+        note: str,
+        approved_fact_id: str | None = None,
+        reviewed_at: datetime | None = None,
+    ) -> CandidateReviewEvent:
+        if target_status not in {
+            CandidateReviewStatus.APPROVED,
+            CandidateReviewStatus.REJECTED,
+        }:
+            raise InvalidCandidateReviewError(target_status.value)
+        if target_status == CandidateReviewStatus.APPROVED and not approved_fact_id:
+            raise InvalidCandidateReviewError("approved review requires approved_fact_id")
+        if target_status == CandidateReviewStatus.REJECTED and approved_fact_id is not None:
+            raise InvalidCandidateReviewError("rejected review cannot reference a fact")
+
+        event_time = reviewed_at or datetime.now(timezone.utc)
+        with self.connection() as connection:
+            connection.execute("begin immediate")
+            candidate = connection.execute(
+                "select 1 from evidence_candidates where candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+            if candidate is None:
+                raise KeyError(candidate_id)
+            current = connection.execute(
+                """
+                select to_status from candidate_review_events
+                where candidate_id = ?
+                order by event_id desc
+                limit 1
+                """,
+                (candidate_id,),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError(f"candidate {candidate_id} has no review event")
+            current_status = CandidateReviewStatus(current["to_status"])
+            if current_status != CandidateReviewStatus.PENDING:
+                raise CandidateAlreadyReviewedError(candidate_id)
+            cursor = connection.execute(
+                """
+                insert into candidate_review_events (
+                    candidate_id, from_status, to_status, reviewed_at,
+                    reviewer_id, note, approved_fact_id
+                )
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    candidate_id,
+                    current_status.value,
+                    target_status.value,
+                    event_time.isoformat(),
+                    reviewer_id,
+                    note,
+                    approved_fact_id,
+                ),
+            )
+            event_id = cursor.lastrowid
+        if event_id is None:
+            raise RuntimeError("candidate review event did not receive an ID")
+        return CandidateReviewEvent(
+            event_id=event_id,
+            candidate_id=candidate_id,
+            from_status=current_status,
+            to_status=target_status,
+            reviewed_at=event_time,
+            reviewer_id=reviewer_id,
+            note=note,
+            approved_fact_id=approved_fact_id,
+        )
+
+    @staticmethod
+    def _candidate_review_event_from_row(row: sqlite3.Row) -> CandidateReviewEvent:
+        return CandidateReviewEvent(
+            event_id=row["event_id"],
+            candidate_id=row["candidate_id"],
+            from_status=(
+                CandidateReviewStatus(row["from_status"]) if row["from_status"] else None
+            ),
+            to_status=CandidateReviewStatus(row["to_status"]),
+            reviewed_at=datetime.fromisoformat(row["reviewed_at"]),
+            reviewer_id=row["reviewer_id"],
+            note=row["note"],
+            approved_fact_id=row["approved_fact_id"],
+        )
+
     def save_facts(self, facts: list[AtomicFact]) -> None:
         try:
             with self.connection() as connection:
@@ -357,9 +571,10 @@ class BriefingStore:
             insert into facts (
                 fact_id, run_id, report_date, report_type, module, claim, classification,
                 source_name, source_url, source_type, published_at, fetched_at, confidence,
-                raw_snapshot_path, derived_from_fact_ids, used_in_sections
+                raw_snapshot_path, derived_from_fact_ids, used_in_sections,
+                source_candidate_id, source_snapshot_id
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -379,6 +594,8 @@ class BriefingStore:
                     record["raw_snapshot_path"],
                     _to_json(record["derived_from_fact_ids"]),
                     _to_json(record["used_in_sections"]),
+                    record["source_candidate_id"],
+                    record["source_snapshot_id"],
                 )
                 for record in records
             ],
@@ -410,6 +627,8 @@ class BriefingStore:
                 raw_snapshot_path=row["raw_snapshot_path"],
                 derived_from_fact_ids=json.loads(row["derived_from_fact_ids"]),
                 used_in_sections=json.loads(row["used_in_sections"]),
+                source_candidate_id=row["source_candidate_id"],
+                source_snapshot_id=row["source_snapshot_id"],
             )
             for row in rows
         ]
@@ -720,6 +939,36 @@ create table if not exists source_snapshots (
 create index if not exists idx_source_snapshots_run_id
 on source_snapshots (run_id);
 
+create table if not exists evidence_candidates (
+    candidate_id text primary key,
+    run_id text not null,
+    snapshot_id text not null,
+    module text not null,
+    title text not null,
+    detail_url text not null,
+    published_at text,
+    excerpt text not null,
+    suggested_classification text not null,
+    created_at text not null
+);
+
+create index if not exists idx_evidence_candidates_run_id
+on evidence_candidates (run_id, candidate_id);
+
+create table if not exists candidate_review_events (
+    event_id integer primary key autoincrement,
+    candidate_id text not null,
+    from_status text,
+    to_status text not null,
+    reviewed_at text not null,
+    reviewer_id text,
+    note text not null,
+    approved_fact_id text
+);
+
+create index if not exists idx_candidate_review_events_candidate_id
+on candidate_review_events (candidate_id, event_id);
+
 create table if not exists facts (
     fact_id text primary key,
     run_id text not null,
@@ -736,7 +985,9 @@ create table if not exists facts (
     confidence text not null,
     raw_snapshot_path text not null,
     derived_from_fact_ids text not null,
-    used_in_sections text not null
+    used_in_sections text not null,
+    source_candidate_id text,
+    source_snapshot_id text
 );
 
 create index if not exists idx_facts_run_id
