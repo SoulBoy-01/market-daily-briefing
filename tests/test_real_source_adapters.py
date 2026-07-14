@@ -146,6 +146,26 @@ def test_market_data_collector_uses_provider_sector_trade_date_not_request_date(
     assert result.sector_snapshot.trade_date == date(2026, 7, 1)
 
 
+def test_market_data_collector_preserves_empty_sector_snapshot_for_degraded_gate(tmp_path):
+    class EmptySectorClient(FakeMarketClient):
+        def sector_spot(self):
+            return []
+
+    result = MarketDataCollector(client=EmptySectorClient()).collect(
+        run_id="run-empty-sector",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["sector_moves"],
+        raw_dir=tmp_path / "raw",
+    )
+
+    assert result.sector_snapshot is None
+    assert result.facts == []
+    assert len(result.snapshots) == 1
+    assert result.snapshots[0].metadata["rows"] == 0
+    assert Path(result.snapshots[0].raw_path).is_file()
+
+
 def test_official_source_collector_extracts_official_fact(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

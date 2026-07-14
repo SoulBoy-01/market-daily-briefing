@@ -97,11 +97,6 @@ class MarketDataCollector:
 
         if "sector_moves" in enabled_module_set:
             rows = self.client.sector_spot()
-            sector_trade_dates = {
-                date.fromisoformat(str(row["trade_date"])) for row in rows
-            }
-            if len(sector_trade_dates) != 1:
-                raise ValueError("sector rows must contain one trade_date")
             snapshot_file = _write_json(
                 raw_dir,
                 report_date,
@@ -121,12 +116,18 @@ class MarketDataCollector:
                 metadata={"taxonomy": self.client.sector_taxonomy},
             )
             snapshots.append(snapshot)
-            sector_snapshot = SectorSnapshotRecord(
-                provider_id=provider_id,
-                trade_date=sector_trade_dates.pop(),
-                taxonomy=self.client.sector_taxonomy,
-                evidence_id=snapshot.snapshot_id,
-            )
+            sector_trade_dates = {
+                date.fromisoformat(str(row["trade_date"])) for row in rows
+            }
+            if len(sector_trade_dates) > 1:
+                raise ValueError("sector rows must contain one trade_date")
+            if sector_trade_dates:
+                sector_snapshot = SectorSnapshotRecord(
+                    provider_id=provider_id,
+                    trade_date=sector_trade_dates.pop(),
+                    taxonomy=self.client.sector_taxonomy,
+                    evidence_id=snapshot.snapshot_id,
+                )
             facts.extend(
                 _sector_fact(
                     run_id=run_id,
