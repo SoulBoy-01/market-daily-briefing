@@ -1,0 +1,26 @@
+{
+  "case_id": "broad-rise",
+  "scenario": "普涨",
+  "report_date": "2026-06-29",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-29", "symbol": "000001.SH", "close": "3342.10", "change_pct": "0.82", "evidence_id": "rise-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-29", "symbol": "399001.SZ", "close": "10521.44", "change_pct": "1.14", "evidence_id": "rise-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-29", "symbol": "399006.SZ", "close": "2148.32", "change_pct": "1.36", "evidence_id": "rise-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-29", "symbol": "000001.SH", "close": "3342.10", "change_pct": "0.82", "evidence_id": "rise-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-29", "symbol": "399001.SZ", "close": "10521.44", "change_pct": "1.14", "evidence_id": "rise-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-29", "symbol": "399006.SZ", "close": "2148.32", "change_pct": "1.36", "evidence_id": "rise-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-06-29", "total_turnover_cny": "1120000000000", "turnover_change_pct": "8.4", "advancing_count": 3820, "declining_count": 1190, "evidence_id": "rise-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-06-29", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "半导体", "change_pct": "3.20"}], "laggards": [{"name": "煤炭", "change_pct": "-0.40"}], "evidence_id": "rise-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "checked_no_updates", "evidence_id": "rise-official"}]
+  },
+  "expected": {"publishable": true, "blocking_error_codes": [], "warning_codes": []},
+  "evidence": [
+    {"evidence_id": "rise-a", "source_name": "合成来源 A", "snapshot_ref": "case://broad-rise/provider-a"},
+    {"evidence_id": "rise-b", "source_name": "合成来源 B", "snapshot_ref": "case://broad-rise/provider-b"},
+    {"evidence_id": "rise-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://broad-rise/temperature"},
+    {"evidence_id": "rise-sector", "source_name": "合成板块来源", "snapshot_ref": "case://broad-rise/sectors"},
+    {"evidence_id": "rise-official", "source_name": "合成交易所", "snapshot_ref": "case://broad-rise/official"}
+  ]
+}
