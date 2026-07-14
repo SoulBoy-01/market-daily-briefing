@@ -1,0 +1,26 @@
+{
+  "case_id": "official-failure",
+  "scenario": "官方来源失败",
+  "report_date": "2026-06-30",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-30", "symbol": "000001.SH", "close": "3335.20", "change_pct": "-0.21", "evidence_id": "official-failure-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-30", "symbol": "399001.SZ", "close": "10498.10", "change_pct": "-0.22", "evidence_id": "official-failure-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-30", "symbol": "399006.SZ", "close": "2141.90", "change_pct": "-0.30", "evidence_id": "official-failure-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-30", "symbol": "000001.SH", "close": "3335.20", "change_pct": "-0.21", "evidence_id": "official-failure-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-30", "symbol": "399001.SZ", "close": "10498.10", "change_pct": "-0.22", "evidence_id": "official-failure-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-30", "symbol": "399006.SZ", "close": "2141.90", "change_pct": "-0.30", "evidence_id": "official-failure-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-06-30", "total_turnover_cny": "980000000000", "turnover_change_pct": "-12.5", "advancing_count": 2010, "declining_count": 2980, "evidence_id": "official-failure-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-06-30", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "银行", "change_pct": "1.10"}], "laggards": [{"name": "传媒", "change_pct": "-2.30"}], "evidence_id": "official-failure-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "check_failed", "evidence_id": "official-failure-official"}]
+  },
+  "expected": {"publishable": true, "blocking_error_codes": [], "warning_codes": ["official_check_failed"]},
+  "evidence": [
+    {"evidence_id": "official-failure-a", "source_name": "合成来源 A", "snapshot_ref": "case://official-failure/provider-a"},
+    {"evidence_id": "official-failure-b", "source_name": "合成来源 B", "snapshot_ref": "case://official-failure/provider-b"},
+    {"evidence_id": "official-failure-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://official-failure/temperature"},
+    {"evidence_id": "official-failure-sector", "source_name": "合成板块来源", "snapshot_ref": "case://official-failure/sectors"},
+    {"evidence_id": "official-failure-official", "source_name": "合成交易所", "snapshot_ref": "case://official-failure/official"}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "no-official-updates",
+  "scenario": "无官方新增",
+  "report_date": "2026-06-19",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-19", "symbol": "000001.SH", "close": "3281.40", "change_pct": "0.05", "evidence_id": "no-official-updates-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-19", "symbol": "399001.SZ", "close": "10181.30", "change_pct": "0.10", "evidence_id": "no-official-updates-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-19", "symbol": "399006.SZ", "close": "2070.20", "change_pct": "0.08", "evidence_id": "no-official-updates-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-19", "symbol": "000001.SH", "close": "3281.40", "change_pct": "0.05", "evidence_id": "no-official-updates-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-19", "symbol": "399001.SZ", "close": "10181.30", "change_pct": "0.10", "evidence_id": "no-official-updates-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-19", "symbol": "399006.SZ", "close": "2070.20", "change_pct": "0.08", "evidence_id": "no-official-updates-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-06-19", "total_turnover_cny": "870000000000", "turnover_change_pct": "-4.4", "advancing_count": 2580, "declining_count": 2390, "evidence_id": "no-official-updates-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-06-19", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "医药生物", "change_pct": "1.30"}], "laggards": [{"name": "钢铁", "change_pct": "-0.90"}], "evidence_id": "no-official-updates-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "checked_no_updates", "evidence_id": "no-official-updates-official"}]
+  },
+  "expected": {"publishable": true, "blocking_error_codes": [], "warning_codes": []},
+  "evidence": [
+    {"evidence_id": "no-official-updates-a", "source_name": "合成来源 A", "snapshot_ref": "case://no-official-updates/provider-a"},
+    {"evidence_id": "no-official-updates-b", "source_name": "合成来源 B", "snapshot_ref": "case://no-official-updates/provider-b"},
+    {"evidence_id": "no-official-updates-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://no-official-updates/temperature"},
+    {"evidence_id": "no-official-updates-sector", "source_name": "合成板块来源", "snapshot_ref": "case://no-official-updates/sectors"},
+    {"evidence_id": "no-official-updates-official", "source_name": "合成交易所", "snapshot_ref": "case://no-official-updates/official"}
+  ]
+}

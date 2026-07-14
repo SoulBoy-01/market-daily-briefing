@@ -1,0 +1,26 @@
+{
+  "case_id": "low-turnover",
+  "scenario": "缩量",
+  "report_date": "2026-06-24",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-24", "symbol": "000001.SH", "close": "3302.00", "change_pct": "0.12", "evidence_id": "low-turnover-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-24", "symbol": "399001.SZ", "close": "10276.80", "change_pct": "-0.11", "evidence_id": "low-turnover-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-24", "symbol": "399006.SZ", "close": "2096.50", "change_pct": "-0.22", "evidence_id": "low-turnover-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-24", "symbol": "000001.SH", "close": "3302.00", "change_pct": "0.12", "evidence_id": "low-turnover-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-24", "symbol": "399001.SZ", "close": "10276.80", "change_pct": "-0.11", "evidence_id": "low-turnover-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-24", "symbol": "399006.SZ", "close": "2096.50", "change_pct": "-0.22", "evidence_id": "low-turnover-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-06-24", "total_turnover_cny": "760000000000", "turnover_change_pct": "-47.6", "advancing_count": 2450, "declining_count": 2510, "evidence_id": "low-turnover-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-06-24", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "食品饮料", "change_pct": "1.20"}], "laggards": [{"name": "国防军工", "change_pct": "-1.10"}], "evidence_id": "low-turnover-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "checked_no_updates", "evidence_id": "low-turnover-official"}]
+  },
+  "expected": {"publishable": true, "blocking_error_codes": [], "warning_codes": []},
+  "evidence": [
+    {"evidence_id": "low-turnover-a", "source_name": "合成来源 A", "snapshot_ref": "case://low-turnover/provider-a"},
+    {"evidence_id": "low-turnover-b", "source_name": "合成来源 B", "snapshot_ref": "case://low-turnover/provider-b"},
+    {"evidence_id": "low-turnover-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://low-turnover/temperature"},
+    {"evidence_id": "low-turnover-sector", "source_name": "合成板块来源", "snapshot_ref": "case://low-turnover/sectors"},
+    {"evidence_id": "low-turnover-official", "source_name": "合成交易所", "snapshot_ref": "case://low-turnover/official"}
+  ]
+}

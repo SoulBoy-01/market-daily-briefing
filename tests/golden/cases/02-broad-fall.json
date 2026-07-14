@@ -1,0 +1,26 @@
+{
+  "case_id": "broad-fall",
+  "scenario": "普跌",
+  "report_date": "2026-06-22",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-22", "symbol": "000001.SH", "close": "3260.10", "change_pct": "-1.22", "evidence_id": "broad-fall-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-22", "symbol": "399001.SZ", "close": "10102.40", "change_pct": "-1.86", "evidence_id": "broad-fall-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-06-22", "symbol": "399006.SZ", "close": "2055.70", "change_pct": "-2.14", "evidence_id": "broad-fall-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-22", "symbol": "000001.SH", "close": "3260.10", "change_pct": "-1.22", "evidence_id": "broad-fall-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-22", "symbol": "399001.SZ", "close": "10102.40", "change_pct": "-1.86", "evidence_id": "broad-fall-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-06-22", "symbol": "399006.SZ", "close": "2055.70", "change_pct": "-2.14", "evidence_id": "broad-fall-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-06-22", "total_turnover_cny": "1080000000000", "turnover_change_pct": "6.2", "advancing_count": 780, "declining_count": 4210, "evidence_id": "broad-fall-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-06-22", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "银行", "change_pct": "0.30"}], "laggards": [{"name": "计算机", "change_pct": "-4.10"}], "evidence_id": "broad-fall-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "checked_no_updates", "evidence_id": "broad-fall-official"}]
+  },
+  "expected": {"publishable": true, "blocking_error_codes": [], "warning_codes": []},
+  "evidence": [
+    {"evidence_id": "broad-fall-a", "source_name": "合成来源 A", "snapshot_ref": "case://broad-fall/provider-a"},
+    {"evidence_id": "broad-fall-b", "source_name": "合成来源 B", "snapshot_ref": "case://broad-fall/provider-b"},
+    {"evidence_id": "broad-fall-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://broad-fall/temperature"},
+    {"evidence_id": "broad-fall-sector", "source_name": "合成板块来源", "snapshot_ref": "case://broad-fall/sectors"},
+    {"evidence_id": "broad-fall-official", "source_name": "合成交易所", "snapshot_ref": "case://broad-fall/official"}
+  ]
+}

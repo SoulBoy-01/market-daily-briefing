@@ -1,0 +1,26 @@
+{
+  "case_id": "source-conflict",
+  "scenario": "双源冲突",
+  "report_date": "2026-07-01",
+  "inputs": {
+    "core_indices": [
+      {"provider_id": "synthetic-a", "trade_date": "2026-07-01", "symbol": "000001.SH", "close": "3350.10", "change_pct": "0.45", "evidence_id": "source-conflict-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-07-01", "symbol": "399001.SZ", "close": "10540.20", "change_pct": "0.40", "evidence_id": "source-conflict-a"},
+      {"provider_id": "synthetic-a", "trade_date": "2026-07-01", "symbol": "399006.SZ", "close": "2152.10", "change_pct": "0.48", "evidence_id": "source-conflict-a"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-07-01", "symbol": "000001.SH", "close": "3351.10", "change_pct": "0.48", "evidence_id": "source-conflict-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-07-01", "symbol": "399001.SZ", "close": "10540.20", "change_pct": "0.40", "evidence_id": "source-conflict-b"},
+      {"provider_id": "synthetic-b", "trade_date": "2026-07-01", "symbol": "399006.SZ", "close": "2152.10", "change_pct": "0.48", "evidence_id": "source-conflict-b"}
+    ],
+    "market_temperature": {"provider_id": "synthetic-temperature", "trade_date": "2026-07-01", "total_turnover_cny": "1020000000000", "turnover_change_pct": "4.1", "advancing_count": 3090, "declining_count": 1900, "evidence_id": "source-conflict-temperature"},
+    "sector_snapshot": {"provider_id": "synthetic-sector", "trade_date": "2026-07-01", "taxonomy": "synthetic-industry-v1", "leaders": [{"name": "通信", "change_pct": "2.60"}], "laggards": [{"name": "石油石化", "change_pct": "-0.70"}], "evidence_id": "source-conflict-sector"},
+    "official_checks": [{"source_name": "合成交易所", "result": "checked_no_updates", "evidence_id": "source-conflict-official"}]
+  },
+  "expected": {"publishable": false, "blocking_error_codes": ["core_index_source_conflict"], "warning_codes": []},
+  "evidence": [
+    {"evidence_id": "source-conflict-a", "source_name": "合成来源 A", "snapshot_ref": "case://source-conflict/provider-a"},
+    {"evidence_id": "source-conflict-b", "source_name": "合成来源 B", "snapshot_ref": "case://source-conflict/provider-b"},
+    {"evidence_id": "source-conflict-temperature", "source_name": "合成温度来源", "snapshot_ref": "case://source-conflict/temperature"},
+    {"evidence_id": "source-conflict-sector", "source_name": "合成板块来源", "snapshot_ref": "case://source-conflict/sectors"},
+    {"evidence_id": "source-conflict-official", "source_name": "合成交易所", "snapshot_ref": "case://source-conflict/official"}
+  ]
+}
