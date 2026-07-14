@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from market_briefing.config import AppConfig, load_config
+from market_briefing.audit import recover_orphaned_publication_directories
 from market_briefing.domain import FeedbackEntry, RawSnapshot, Report, ReportType
 from market_briefing.feedback import ALLOWED_FEEDBACK_TAGS, summarize_feedback, validate_feedback_entry
 from market_briefing.labels import (
@@ -28,7 +29,7 @@ from market_briefing.labels import (
     status_label,
 )
 from market_briefing.pipeline import PipelineRequest, run_fixture_pipeline
-from market_briefing.storage import BriefingStore, RunAlreadyExistsError
+from market_briefing.storage import AuditIntegrityError, BriefingStore, RunAlreadyExistsError
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -48,6 +49,12 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     app_config = config or load_default_app_config()
     briefing_store = store or BriefingStore(app_config.database_path)
     briefing_store.initialize()
+    recover_orphaned_publication_directories(
+        raw_dir=app_config.raw_dir,
+        reports_dir=app_config.reports_dir,
+        diagnostics_dir=app_config.effective_diagnostics_dir,
+        published_run_ids=briefing_store.published_run_ids(),
+    )
 
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     templates.env.filters["safe_source_url"] = safe_source_url
@@ -145,8 +152,14 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     def report_detail(request: Request, report_id: str):
         try:
             report = briefing_store.get_report(report_id)
+            briefing_store.assert_report_integrity(report_id)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+        except AuditIntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="审计完整性校验失败",
+            ) from exc
 
         facts = briefing_store.list_facts(report.run_id)
         snapshots = briefing_store.list_snapshots(report.run_id)

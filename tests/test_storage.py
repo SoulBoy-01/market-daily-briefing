@@ -17,11 +17,14 @@ from market_briefing.domain import (
     SourceType,
 )
 from market_briefing.storage import (
+    AuditIntegrityError,
     BriefingStore,
     InvalidRunTransitionError,
     RunAlreadyExistsError,
+    PublishedRecordExistsError,
     build_report_paths,
 )
+from market_briefing.audit import write_snapshot_text
 
 
 class TrackingConnection(sqlite3.Connection):
@@ -320,6 +323,193 @@ def test_store_round_trips_snapshot_fact_and_report(tmp_path):
     assert loaded_report.sections[0].fact_lines[0].fact_id == "fact-001"
     assert loaded_report.sections[0].fact_lines[0].classification == FactClassification.FACT
     assert loaded_report.sections[0].fact_lines[0].derived_from_fact_ids == ("source-fact-001",)
+
+
+def test_published_snapshots_facts_and_reports_are_insert_only(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    fetched_at = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    snapshot_file = write_snapshot_text(tmp_path / "snapshot.json", "{}")
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-insert-only",
+        run_id="run-insert-only",
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://insert-only",
+        source_type=SourceType.DATA_API,
+        fetched_at=fetched_at,
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    fact = AtomicFact(
+        fact_id="fact-insert-only",
+        run_id="run-insert-only",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        module="market_indices",
+        claim="Insert-only fact.",
+        classification=FactClassification.FACT,
+        source_name="Fixture",
+        source_url="fixture://insert-only",
+        source_type=SourceType.DATA_API,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path=str(snapshot_file.path),
+    )
+    report = Report(
+        report_id="report-insert-only",
+        run_id="run-insert-only",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="Insert-only report",
+        sections=[],
+        markdown_path=str(tmp_path / "briefing.md"),
+        html_path=str(tmp_path / "briefing.html"),
+        fact_ledger_path=str(tmp_path / "facts.json"),
+    )
+
+    store.save_snapshot(snapshot)
+    store.save_facts([fact])
+    store.save_report(report)
+
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_snapshot(snapshot)
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_facts([fact])
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_report(report)
+
+
+def test_publish_run_bundle_rolls_back_all_visible_records_on_conflict(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    fetched_at = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    run = Run.create(
+        run_id="run-bundle",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot_file = write_snapshot_text(tmp_path / "snapshot-bundle.json", "{}")
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-bundle",
+        run_id=run.run_id,
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://bundle",
+        source_type=SourceType.DATA_API,
+        fetched_at=fetched_at,
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    fact = AtomicFact(
+        fact_id="fact-bundle-conflict",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        module="market_indices",
+        claim="Bundle fact.",
+        classification=FactClassification.FACT,
+        source_name="Fixture",
+        source_url="fixture://bundle",
+        source_type=SourceType.DATA_API,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path=str(snapshot_file.path),
+    )
+    conflicting_fact = replace(fact, run_id="other-run", claim="Existing conflict.")
+    store.save_facts([conflicting_fact])
+    report = Report(
+        report_id="report-bundle",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Bundle report",
+        sections=[],
+        markdown_path=str(tmp_path / "bundle.md"),
+        html_path=str(tmp_path / "bundle.html"),
+        fact_ledger_path=str(tmp_path / "bundle.json"),
+    )
+
+    with pytest.raises(PublishedRecordExistsError):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[fact],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_snapshots(run.run_id) == []
+    assert store.list_facts(run.run_id) == []
+    with pytest.raises(KeyError):
+        store.get_report(report.report_id)
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+    assert [event.to_status for event in store.list_run_events(run.run_id)] == [
+        RunStatus.CREATED,
+        RunStatus.RUNNING,
+    ]
+
+
+def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    fetched_at = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    run = Run.create(
+        run_id="run-integrity",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot_file = write_snapshot_text(tmp_path / "integrity.json", "original")
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-integrity",
+        run_id=run.run_id,
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://integrity",
+        source_type=SourceType.DATA_API,
+        fetched_at=fetched_at,
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    report_files = [tmp_path / name for name in ("briefing.md", "briefing.html", "facts.json")]
+    for report_file in report_files:
+        report_file.write_text("report", encoding="utf-8")
+    report = Report(
+        report_id="report-integrity",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Integrity report",
+        sections=[],
+        markdown_path=str(report_files[0]),
+        html_path=str(report_files[1]),
+        fact_ledger_path=str(report_files[2]),
+    )
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+
+    store.assert_report_integrity(report.report_id)
+    snapshot_file.path.write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="snapshot-integrity"):
+        store.assert_report_integrity(report.report_id)
 
 
 def test_get_report_loads_legacy_sections_without_fact_lines(tmp_path):

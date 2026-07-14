@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from market_briefing.audit import verify_snapshot_hash
 from market_briefing.domain import (
     AtomicFact,
     FactClassification,
@@ -31,6 +32,14 @@ class RunAlreadyExistsError(ValueError):
 
 
 class InvalidRunTransitionError(ValueError):
+    pass
+
+
+class PublishedRecordExistsError(ValueError):
+    pass
+
+
+class AuditIntegrityError(RuntimeError):
     pass
 
 
@@ -264,30 +273,28 @@ class BriefingStore:
         )
 
     def save_snapshot(self, snapshot: RawSnapshot) -> None:
-        record = snapshot.to_record()
-        with self.connection() as connection:
-            connection.execute(
-                """
-                insert into source_snapshots (
-                    snapshot_id, run_id, module, source_name, source_url, source_type,
-                    fetched_at, content_type, raw_path, content_sha256, provider_name,
-                    license_ref, metadata
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(snapshot_id) do update set
-                    run_id=excluded.run_id,
-                    module=excluded.module,
-                    source_name=excluded.source_name,
-                    source_url=excluded.source_url,
-                    source_type=excluded.source_type,
-                    fetched_at=excluded.fetched_at,
-                    content_type=excluded.content_type,
-                    raw_path=excluded.raw_path,
-                    content_sha256=excluded.content_sha256,
-                    provider_name=excluded.provider_name,
-                    license_ref=excluded.license_ref,
-                    metadata=excluded.metadata
-                """,
+        try:
+            with self.connection() as connection:
+                self._insert_snapshots(connection, [snapshot])
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError(snapshot.snapshot_id) from exc
+
+    @staticmethod
+    def _insert_snapshots(
+        connection: sqlite3.Connection,
+        snapshots: list[RawSnapshot],
+    ) -> None:
+        records = [snapshot.to_record() for snapshot in snapshots]
+        connection.executemany(
+            """
+            insert into source_snapshots (
+                snapshot_id, run_id, module, source_name, source_url, source_type,
+                fetched_at, content_type, raw_path, content_sha256, provider_name,
+                license_ref, metadata
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
                 (
                     record["snapshot_id"],
                     record["run_id"],
@@ -302,8 +309,10 @@ class BriefingStore:
                     record["provider_name"],
                     record["license_ref"],
                     _to_json(record["metadata"]),
-                ),
-            )
+                )
+                for record in records
+            ],
+        )
 
     def list_snapshots(self, run_id: str) -> list[RawSnapshot]:
         with self.connection() as connection:
@@ -331,55 +340,49 @@ class BriefingStore:
         ]
 
     def save_facts(self, facts: list[AtomicFact]) -> None:
+        try:
+            with self.connection() as connection:
+                self._insert_facts(connection, facts)
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError("fact") from exc
+
+    @staticmethod
+    def _insert_facts(
+        connection: sqlite3.Connection,
+        facts: list[AtomicFact],
+    ) -> None:
         records = [fact.to_record() for fact in facts]
-        with self.connection() as connection:
-            connection.executemany(
-                """
-                insert into facts (
-                    fact_id, run_id, report_date, report_type, module, claim, classification,
-                    source_name, source_url, source_type, published_at, fetched_at, confidence,
-                    raw_snapshot_path, derived_from_fact_ids, used_in_sections
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(fact_id) do update set
-                    run_id=excluded.run_id,
-                    report_date=excluded.report_date,
-                    report_type=excluded.report_type,
-                    module=excluded.module,
-                    claim=excluded.claim,
-                    classification=excluded.classification,
-                    source_name=excluded.source_name,
-                    source_url=excluded.source_url,
-                    source_type=excluded.source_type,
-                    published_at=excluded.published_at,
-                    fetched_at=excluded.fetched_at,
-                    confidence=excluded.confidence,
-                    raw_snapshot_path=excluded.raw_snapshot_path,
-                    derived_from_fact_ids=excluded.derived_from_fact_ids,
-                    used_in_sections=excluded.used_in_sections
-                """,
-                [
-                    (
-                        record["fact_id"],
-                        record["run_id"],
-                        record["report_date"],
-                        record["report_type"],
-                        record["module"],
-                        record["claim"],
-                        record["classification"],
-                        record["source_name"],
-                        record["source_url"],
-                        record["source_type"],
-                        record["published_at"],
-                        record["fetched_at"],
-                        record["confidence"],
-                        record["raw_snapshot_path"],
-                        _to_json(record["derived_from_fact_ids"]),
-                        _to_json(record["used_in_sections"]),
-                    )
-                    for record in records
-                ],
+        connection.executemany(
+            """
+            insert into facts (
+                fact_id, run_id, report_date, report_type, module, claim, classification,
+                source_name, source_url, source_type, published_at, fetched_at, confidence,
+                raw_snapshot_path, derived_from_fact_ids, used_in_sections
             )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    record["fact_id"],
+                    record["run_id"],
+                    record["report_date"],
+                    record["report_type"],
+                    record["module"],
+                    record["claim"],
+                    record["classification"],
+                    record["source_name"],
+                    record["source_url"],
+                    record["source_type"],
+                    record["published_at"],
+                    record["fetched_at"],
+                    record["confidence"],
+                    record["raw_snapshot_path"],
+                    _to_json(record["derived_from_fact_ids"]),
+                    _to_json(record["used_in_sections"]),
+                )
+                for record in records
+            ],
+        )
 
     def list_facts(self, run_id: str) -> list[AtomicFact]:
         with self.connection() as connection:
@@ -412,36 +415,136 @@ class BriefingStore:
         ]
 
     def save_report(self, report: Report) -> None:
-        with self.connection() as connection:
-            connection.execute(
-                """
-                insert into reports (
-                    report_id, run_id, report_date, report_type, title,
-                    sections, markdown_path, html_path, fact_ledger_path
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(report_id) do update set
-                    run_id=excluded.run_id,
-                    report_date=excluded.report_date,
-                    report_type=excluded.report_type,
-                    title=excluded.title,
-                    sections=excluded.sections,
-                    markdown_path=excluded.markdown_path,
-                    html_path=excluded.html_path,
-                    fact_ledger_path=excluded.fact_ledger_path
-                """,
-                (
-                    report.report_id,
-                    report.run_id,
-                    report.report_date,
-                    report.report_type.value,
-                    report.title,
-                    _to_json([_section_to_record(section) for section in report.sections]),
-                    report.markdown_path,
-                    report.html_path,
-                    report.fact_ledger_path,
-                ),
+        try:
+            with self.connection() as connection:
+                self._insert_report(connection, report)
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError(report.report_id) from exc
+
+    @staticmethod
+    def _insert_report(connection: sqlite3.Connection, report: Report) -> None:
+        connection.execute(
+            """
+            insert into reports (
+                report_id, run_id, report_date, report_type, title,
+                sections, markdown_path, html_path, fact_ledger_path
             )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report.report_id,
+                report.run_id,
+                report.report_date,
+                report.report_type.value,
+                report.title,
+                _to_json([_section_to_record(section) for section in report.sections]),
+                report.markdown_path,
+                report.html_path,
+                report.fact_ledger_path,
+            ),
+        )
+
+    def publish_run_bundle(
+        self,
+        *,
+        snapshots: list[RawSnapshot],
+        facts: list[AtomicFact],
+        report: Report,
+        target_status: RunStatus,
+        warning_count: int = 0,
+    ) -> Run:
+        now = datetime.now(timezone.utc)
+        try:
+            with self.connection() as connection:
+                connection.execute("begin immediate")
+                row = connection.execute(
+                    "select * from runs where run_id = ?",
+                    (report.run_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(report.run_id)
+                current_status = RunStatus(row["status"])
+                if not can_transition_run(current_status, target_status):
+                    raise InvalidRunTransitionError(
+                        f"cannot transition run {report.run_id} from {current_status.value} "
+                        f"to {target_status.value}"
+                    )
+
+                self._insert_snapshots(connection, snapshots)
+                self._insert_facts(connection, facts)
+                self._insert_report(connection, report)
+                completed_at = (
+                    now.isoformat()
+                    if target_status
+                    in {
+                        RunStatus.COMPLETED,
+                        RunStatus.COMPLETED_WITH_WARNINGS,
+                        RunStatus.FAILED,
+                    }
+                    else row["completed_at"]
+                )
+                connection.execute(
+                    """
+                    update runs
+                    set status = ?, completed_at = ?, warning_count = ?
+                    where run_id = ?
+                    """,
+                    (target_status.value, completed_at, warning_count, report.run_id),
+                )
+                connection.execute(
+                    """
+                    insert into run_events (run_id, from_status, to_status, created_at)
+                    values (?, ?, ?, ?)
+                    """,
+                    (
+                        report.run_id,
+                        current_status.value,
+                        target_status.value,
+                        now.isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError(report.run_id) from exc
+
+        run = self.get_run(report.run_id)
+        if run is None:
+            raise KeyError(report.run_id)
+        return run
+
+    def published_run_ids(self) -> set[str]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                select distinct reports.run_id
+                from reports
+                join runs on runs.run_id = reports.run_id
+                where runs.status in (?, ?)
+                """,
+                (RunStatus.COMPLETED.value, RunStatus.COMPLETED_WITH_WARNINGS.value),
+            ).fetchall()
+        return {row["run_id"] for row in rows}
+
+    def assert_report_integrity(self, report_id: str) -> None:
+        report = self.get_report(report_id)
+        run = self.get_run(report.run_id)
+        if run is None or run.status not in {
+            RunStatus.COMPLETED,
+            RunStatus.COMPLETED_WITH_WARNINGS,
+        }:
+            return
+
+        for label, path in (
+            ("markdown", report.markdown_path),
+            ("html", report.html_path),
+            ("fact ledger", report.fact_ledger_path),
+        ):
+            if not Path(path).is_file():
+                raise AuditIntegrityError(f"missing {label} file for {report.report_id}: {path}")
+        for snapshot in self.list_snapshots(report.run_id):
+            if not verify_snapshot_hash(Path(snapshot.raw_path), snapshot.content_sha256):
+                raise AuditIntegrityError(
+                    f"snapshot integrity check failed for {snapshot.snapshot_id}"
+                )
 
     def get_report(self, report_id: str) -> Report:
         with self.connection() as connection:
