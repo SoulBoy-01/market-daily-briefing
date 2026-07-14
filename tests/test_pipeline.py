@@ -9,6 +9,7 @@ from market_briefing.config import AppConfig
 from market_briefing.domain import FeedbackEntry, ReportType, RunStatus
 from market_briefing.pipeline import PipelineRequest, main, run_fixture_pipeline
 from market_briefing.storage import BriefingStore
+from market_briefing.storage import RunAlreadyExistsError
 
 
 def _config(tmp_path):
@@ -164,6 +165,31 @@ def test_fixture_pipeline_preserves_fact_audit_history_across_repeated_runs(tmp_
 
     ledger = json.loads(Path(second.report.fact_ledger_path).read_text(encoding="utf-8"))
     assert {record["fact_id"] for record in ledger} == second_fact_ids
+
+
+def test_fixture_pipeline_rejects_duplicate_run_before_overwriting_outputs(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+    request = PipelineRequest(
+        run_id="run-no-overwrite",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        fixture_path=Path("tests/fixtures/after_close_sources.json"),
+    )
+    first = run_fixture_pipeline(request, config=config, store=store)
+    markdown_path = Path(first.report.markdown_path)
+    original_markdown = markdown_path.read_text(encoding="utf-8")
+
+    with pytest.raises(RunAlreadyExistsError, match="run-no-overwrite"):
+        run_fixture_pipeline(request, config=config, store=store)
+
+    assert markdown_path.read_text(encoding="utf-8") == original_markdown
+    assert [event.to_status for event in store.list_run_events("run-no-overwrite")] == [
+        RunStatus.CREATED,
+        RunStatus.RUNNING,
+        RunStatus.COMPLETED,
+    ]
 
 
 def test_fixture_pipeline_carries_previous_feedback_into_next_report(tmp_path):

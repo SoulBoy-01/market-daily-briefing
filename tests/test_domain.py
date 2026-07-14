@@ -12,8 +12,10 @@ from market_briefing.domain import (
     ReportSection,
     ReportType,
     Run,
+    RunEvent,
     RunStatus,
     SourceType,
+    can_transition_run,
 )
 
 
@@ -157,3 +159,48 @@ def test_run_defaults_to_created_status_and_tracks_modules():
     assert run.enabled_modules == ("overnight_context", "today_watchpoints")
     with pytest.raises(AttributeError):
         run.enabled_modules.append("market_indices")
+
+
+@pytest.mark.parametrize(
+    ("current", "target"),
+    [
+        (RunStatus.CREATED, RunStatus.RUNNING),
+        (RunStatus.RUNNING, RunStatus.AWAITING_REVIEW),
+        (RunStatus.RUNNING, RunStatus.COMPLETED),
+        (RunStatus.RUNNING, RunStatus.COMPLETED_WITH_WARNINGS),
+        (RunStatus.RUNNING, RunStatus.FAILED),
+        (RunStatus.AWAITING_REVIEW, RunStatus.COMPLETED),
+        (RunStatus.AWAITING_REVIEW, RunStatus.COMPLETED_WITH_WARNINGS),
+        (RunStatus.AWAITING_REVIEW, RunStatus.FAILED),
+    ],
+)
+def test_run_state_machine_allows_only_declared_forward_transitions(current, target):
+    assert can_transition_run(current, target)
+
+
+@pytest.mark.parametrize(
+    ("current", "target"),
+    [
+        (RunStatus.CREATED, RunStatus.COMPLETED),
+        (RunStatus.RUNNING, RunStatus.CREATED),
+        (RunStatus.AWAITING_REVIEW, RunStatus.RUNNING),
+        (RunStatus.COMPLETED, RunStatus.RUNNING),
+        (RunStatus.COMPLETED_WITH_WARNINGS, RunStatus.FAILED),
+        (RunStatus.FAILED, RunStatus.CREATED),
+    ],
+)
+def test_run_state_machine_rejects_skips_backtracking_and_terminal_changes(current, target):
+    assert not can_transition_run(current, target)
+
+
+def test_run_event_is_immutable():
+    event = RunEvent(
+        event_id=1,
+        run_id="run-001",
+        from_status=None,
+        to_status=RunStatus.CREATED,
+        created_at=datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(AttributeError):
+        event.to_status = RunStatus.RUNNING

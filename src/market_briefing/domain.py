@@ -32,9 +32,39 @@ class ReportType(StrEnum):
 class RunStatus(StrEnum):
     CREATED = "created"
     RUNNING = "running"
+    AWAITING_REVIEW = "awaiting_review"
     COMPLETED = "completed"
     COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     FAILED = "failed"
+
+
+RUN_STATUS_TRANSITIONS = MappingProxyType(
+    {
+        RunStatus.CREATED: frozenset({RunStatus.RUNNING}),
+        RunStatus.RUNNING: frozenset(
+            {
+                RunStatus.AWAITING_REVIEW,
+                RunStatus.COMPLETED,
+                RunStatus.COMPLETED_WITH_WARNINGS,
+                RunStatus.FAILED,
+            }
+        ),
+        RunStatus.AWAITING_REVIEW: frozenset(
+            {
+                RunStatus.COMPLETED,
+                RunStatus.COMPLETED_WITH_WARNINGS,
+                RunStatus.FAILED,
+            }
+        ),
+        RunStatus.COMPLETED: frozenset(),
+        RunStatus.COMPLETED_WITH_WARNINGS: frozenset(),
+        RunStatus.FAILED: frozenset(),
+    }
+)
+
+
+def can_transition_run(current: RunStatus, target: RunStatus) -> bool:
+    return target in RUN_STATUS_TRANSITIONS[current]
 
 
 class FactClassification(StrEnum):
@@ -202,6 +232,7 @@ class Run:
     completed_at: datetime | None = None
     warning_count: int = 0
     error_message: str | None = None
+    supersedes_run_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled_modules", tuple(self.enabled_modules))
@@ -222,3 +253,12 @@ class Run:
             status=RunStatus.CREATED,
             created_at=datetime.now(timezone.utc),
         )
+
+
+@dataclass(frozen=True)
+class RunEvent:
+    event_id: int
+    run_id: str
+    from_status: RunStatus | None
+    to_status: RunStatus
+    created_at: datetime

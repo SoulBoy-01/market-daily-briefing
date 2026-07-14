@@ -4,7 +4,6 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 from pathlib import Path
 
 from market_briefing.collectors.fixtures import FixtureCollector
@@ -51,7 +50,8 @@ def run_fixture_pipeline(
         report_type=request.report_type,
         enabled_modules=enabled_modules,
     )
-    store.save_run(run)
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
 
     collection = FixtureCollector(request.fixture_path).collect(
         run_id=request.run_id,
@@ -88,13 +88,10 @@ def run_fixture_pipeline(
     validation = validate_report_sections(report.sections, facts)
 
     if not validation.ok:
-        store.save_run(
-            replace(
-                run,
-                status=RunStatus.FAILED,
-                completed_at=datetime.now(timezone.utc),
-                warning_count=len(validation.errors),
-            )
+        store.transition_run(
+            run.run_id,
+            RunStatus.FAILED,
+            warning_count=len(validation.errors),
         )
         return PipelineResult(report=None, validation_errors=validation.errors)
 
@@ -116,14 +113,7 @@ def run_fixture_pipeline(
     )
 
     store.save_report(report)
-    store.save_run(
-        replace(
-            run,
-            status=RunStatus.COMPLETED,
-            completed_at=datetime.now(timezone.utc),
-            warning_count=0,
-        )
-    )
+    store.transition_run(run.run_id, RunStatus.COMPLETED, warning_count=0)
     return PipelineResult(report=report, validation_errors=validation.errors)
 
 

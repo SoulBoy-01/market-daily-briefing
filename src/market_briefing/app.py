@@ -28,7 +28,7 @@ from market_briefing.labels import (
     status_label,
 )
 from market_briefing.pipeline import PipelineRequest, run_fixture_pipeline
-from market_briefing.storage import BriefingStore
+from market_briefing.storage import BriefingStore, RunAlreadyExistsError
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -110,16 +110,22 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         _validate_run_id(run_id)
         _validate_report_date(report_date)
         safe_fixture_path = _validate_fixture_path(fixture_path)
-        result = run_fixture_pipeline(
-            PipelineRequest(
-                run_id=run_id,
-                report_date=report_date,
-                report_type=report_type,
-                fixture_path=safe_fixture_path,
-            ),
-            config=app_config,
-            store=briefing_store,
-        )
+        try:
+            result = run_fixture_pipeline(
+                PipelineRequest(
+                    run_id=run_id,
+                    report_date=report_date,
+                    report_type=report_type,
+                    fixture_path=safe_fixture_path,
+                ),
+                config=app_config,
+                store=briefing_store,
+            )
+        except RunAlreadyExistsError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="运行 ID 已存在，请使用新的运行 ID",
+            ) from exc
         if result.validation_errors:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

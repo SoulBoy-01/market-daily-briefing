@@ -133,6 +133,17 @@ def test_dashboard_can_trigger_fixture_run_and_show_report(tmp_path):
     assert "fact-market-001" in report_response.text
 
 
+def test_dashboard_rejects_duplicate_run_with_chinese_conflict(tmp_path):
+    client = _client(tmp_path, raise_server_exceptions=False)
+
+    first_response = _run_fixture(client)
+    duplicate_response = _run_fixture(client)
+
+    assert first_response.status_code == 303
+    assert duplicate_response.status_code == 409
+    assert "运行 ID 已存在，请使用新的运行 ID" in duplicate_response.text
+
+
 def test_dashboard_shows_after_close_sections_as_review_material(tmp_path):
     store, client = _store_and_client(tmp_path)
     store.save_report(
