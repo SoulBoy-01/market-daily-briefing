@@ -75,6 +75,43 @@
   </div>
 </section>
 
+{% if module_coverage or run_warnings %}
+<section class="grid two-column">
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>模块覆盖</h2>
+    </div>
+    {% if module_coverage %}
+      <ul class="link-list">
+        {% for item in module_coverage %}
+          <li>
+            <strong>{{ item.module|module_label }}</strong>
+            <span>{{ item.status|coverage_status_label }}{% if item.source_name %} / {{ item.source_name }}{% endif %}</span>
+            {% if item.message %}<span>{{ item.message }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">暂无模块覆盖记录。</p>
+    {% endif %}
+  </div>
+  <div class="panel">
+    <div class="panel-heading">
+      <h2>运行警告</h2>
+    </div>
+    {% if run_warnings %}
+      <ul class="link-list">
+        {% for warning in run_warnings %}
+          <li>{{ warning.source_name }} / {{ warning.module|module_label }} / {{ warning.message }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">本轮没有运行警告。</p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-heading">
     <h2>审阅样稿</h2>

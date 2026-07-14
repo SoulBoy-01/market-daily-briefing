@@ -9,9 +9,12 @@ from market_briefing.domain import (
     AtomicFact,
     FactClassification,
     FactLine,
+    ModuleCoverage,
+    ModuleCoverageStatus,
     Report,
     ReportSection,
     ReportType,
+    RunWarning,
     SourceType,
 )
 from market_briefing.storage import BriefingStore
@@ -131,6 +134,61 @@ def test_dashboard_can_trigger_fixture_run_and_show_report(tmp_path):
     assert "保存反馈" in report_response.text
     assert "2026-07-02" in report_response.text
     assert "fact-market-001" in report_response.text
+
+
+def test_report_and_dashboard_show_coverage_and_safe_warning_summaries(tmp_path):
+    store, client = _store_and_client(tmp_path)
+    run_response = _run_fixture(client)
+    created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
+    store.save_run_warnings(
+        [
+            RunWarning(
+                warning_id="warning-web-policy",
+                run_id="web-after-close-001",
+                source_name="示例交易所",
+                module="policy_regulation",
+                message="详情页检查失败",
+                detail="Traceback: secret parser diagnostics",
+                created_at=created_at,
+            )
+        ]
+    )
+    store.save_module_coverage(
+        [
+            ModuleCoverage(
+                coverage_id="coverage-web-market",
+                run_id="web-after-close-001",
+                module="market_indices",
+                status=ModuleCoverageStatus.COVERED,
+                source_name="样例市场数据",
+                message="指数样例已覆盖。",
+                recorded_at=created_at,
+            ),
+            ModuleCoverage(
+                coverage_id="coverage-web-policy",
+                run_id="web-after-close-001",
+                module="policy_regulation",
+                status=ModuleCoverageStatus.FAILED,
+                source_name="示例交易所",
+                message="官方详情页未完成覆盖。",
+                recorded_at=created_at,
+            ),
+        ]
+    )
+
+    report_response = client.get(run_response.headers["location"])
+    dashboard_response = client.get("/")
+
+    for response in (report_response, dashboard_response):
+        assert response.status_code == 200
+        assert "模块覆盖" in response.text
+        assert "市场指数" in response.text
+        assert "已覆盖" in response.text
+        assert "政策/监管" in response.text
+        assert "检查失败" in response.text
+        assert "示例交易所 / 政策/监管 / 详情页检查失败" in response.text
+        assert "Traceback" not in response.text
+        assert "secret parser diagnostics" not in response.text
 
 
 def test_report_blocks_display_when_published_snapshot_is_tampered(tmp_path):
@@ -368,6 +426,33 @@ def test_report_feedback_validation_errors_rerender_with_chinese_messages_and_va
     store, client = _store_and_client(tmp_path)
     run_response = _run_fixture(client)
     note = "这段备注应当被保留。"
+    created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
+    store.save_run_warnings(
+        [
+            RunWarning(
+                warning_id="warning-feedback-rerender",
+                run_id="web-after-close-001",
+                source_name="示例交易所",
+                module="policy_regulation",
+                message="反馈回填时也应保留",
+                detail="Traceback: hidden detail",
+                created_at=created_at,
+            )
+        ]
+    )
+    store.save_module_coverage(
+        [
+            ModuleCoverage(
+                coverage_id="coverage-feedback-rerender",
+                run_id="web-after-close-001",
+                module="policy_regulation",
+                status=ModuleCoverageStatus.FAILED,
+                source_name="示例交易所",
+                message="反馈回填时覆盖状态也应保留。",
+                recorded_at=created_at,
+            )
+        ]
+    )
 
     feedback_response = client.post(
         run_response.headers["location"] + "/feedback",
@@ -386,6 +471,9 @@ def test_report_feedback_validation_errors_rerender_with_chinese_messages_and_va
     assert note in feedback_response.text
     assert 'value="6"' in feedback_response.text
     assert 'value="insufficient_risk" checked' in feedback_response.text
+    assert "示例交易所 / 政策/监管 / 反馈回填时也应保留" in feedback_response.text
+    assert "检查失败" in feedback_response.text
+    assert "Traceback" not in feedback_response.text
     assert store.list_feedback("report-web-after-close-001") == []
 
 

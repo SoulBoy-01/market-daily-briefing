@@ -10,12 +10,15 @@ from market_briefing.domain import (
     EvidenceCandidate,
     FactClassification,
     FeedbackEntry,
+    ModuleCoverage,
+    ModuleCoverageStatus,
     RawSnapshot,
     Report,
     ReportSection,
     ReportType,
     Run,
     RunEvent,
+    RunWarning,
     RunStatus,
     SourceType,
     can_transition_run,
@@ -245,3 +248,36 @@ def test_evidence_candidate_and_review_event_are_immutable_audit_records():
         candidate.title = "被覆盖的标题"
     with pytest.raises(AttributeError):
         event.note = "被覆盖的审核备注"
+
+
+@pytest.mark.parametrize(
+    "coverage_status",
+    list(ModuleCoverageStatus),
+)
+def test_warning_and_module_coverage_are_immutable_records(coverage_status):
+    created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
+    warning = RunWarning(
+        warning_id="warning-001",
+        run_id="run-001",
+        source_name="示例交易所",
+        module="policy_regulation",
+        message="详情页检查失败",
+        detail="Traceback: internal diagnostics",
+        created_at=created_at,
+    )
+    coverage = ModuleCoverage(
+        coverage_id=f"coverage-{coverage_status.value}",
+        run_id="run-001",
+        module="policy_regulation",
+        status=coverage_status,
+        source_name="示例交易所",
+        message="覆盖状态说明",
+        recorded_at=created_at,
+    )
+
+    assert warning.to_record()["created_at"] == created_at.isoformat()
+    assert coverage.to_record()["status"] == coverage_status.value
+    with pytest.raises(AttributeError):
+        warning.message = "被覆盖"
+    with pytest.raises(AttributeError):
+        coverage.status = ModuleCoverageStatus.COVERED

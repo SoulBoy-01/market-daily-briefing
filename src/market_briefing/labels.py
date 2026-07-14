@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from market_briefing.domain import FactClassification, ReportType, SourceType
+from market_briefing.domain import (
+    FactClassification,
+    ModuleCoverageStatus,
+    ReportType,
+    SourceType,
+)
 
 
 REPORT_TYPE_LABELS = {
@@ -43,6 +48,14 @@ STATUS_LABELS = {
     "completed": "已完成",
     "completed_with_warnings": "已完成，有警告",
     "failed": "失败",
+}
+
+COVERAGE_STATUS_LABELS = {
+    ModuleCoverageStatus.COVERED.value: "已覆盖",
+    ModuleCoverageStatus.NO_UPDATES.value: "已检查，无新增",
+    ModuleCoverageStatus.PENDING_REVIEW.value: "待审核",
+    ModuleCoverageStatus.FAILED.value: "检查失败",
+    ModuleCoverageStatus.UNSUPPORTED.value: "暂未支持",
 }
 
 MODULE_LABELS = {
@@ -112,6 +125,10 @@ def confidence_label(value: Any) -> str:
 
 def status_label(value: Any) -> str:
     return _label(value, STATUS_LABELS)
+
+
+def coverage_status_label(value: Any) -> str:
+    return _label(value, COVERAGE_STATUS_LABELS)
 
 
 def module_label(value: Any) -> str:

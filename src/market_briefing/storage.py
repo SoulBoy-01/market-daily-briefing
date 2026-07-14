@@ -18,6 +18,8 @@ from market_briefing.domain import (
     FactClassification,
     FactLine,
     FeedbackEntry,
+    ModuleCoverage,
+    ModuleCoverageStatus,
     RawSnapshot,
     Report,
     ReportSection,
@@ -25,6 +27,7 @@ from market_briefing.domain import (
     Run,
     RunEvent,
     RunStatus,
+    RunWarning,
     SourceType,
     can_transition_run,
 )
@@ -633,6 +636,142 @@ class BriefingStore:
             for row in rows
         ]
 
+    def save_run_warnings(self, warnings: list[RunWarning]) -> None:
+        try:
+            with self.connection() as connection:
+                self._insert_run_warnings(connection, warnings)
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError("run warning") from exc
+
+    @staticmethod
+    def _insert_run_warnings(
+        connection: sqlite3.Connection,
+        warnings: list[RunWarning],
+    ) -> None:
+        records = [warning.to_record() for warning in warnings]
+        connection.executemany(
+            """
+            insert into run_warnings (
+                warning_id, run_id, source_name, module, message, detail, created_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    record["warning_id"],
+                    record["run_id"],
+                    record["source_name"],
+                    record["module"],
+                    record["message"],
+                    record["detail"],
+                    record["created_at"],
+                )
+                for record in records
+            ],
+        )
+
+    def list_run_warnings(self, run_id: str) -> list[RunWarning]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                select * from run_warnings
+                where run_id = ?
+                order by created_at, warning_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            RunWarning(
+                warning_id=row["warning_id"],
+                run_id=row["run_id"],
+                source_name=row["source_name"],
+                module=row["module"],
+                message=row["message"],
+                detail=row["detail"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def save_module_coverage(self, coverage: list[ModuleCoverage]) -> None:
+        try:
+            with self.connection() as connection:
+                self._insert_module_coverage(connection, coverage)
+        except sqlite3.IntegrityError as exc:
+            raise PublishedRecordExistsError("module coverage") from exc
+
+    @staticmethod
+    def _insert_module_coverage(
+        connection: sqlite3.Connection,
+        coverage: list[ModuleCoverage],
+    ) -> None:
+        records = [item.to_record() for item in coverage]
+        connection.executemany(
+            """
+            insert into module_coverage (
+                coverage_id, run_id, module, status, source_name, message, recorded_at
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    record["coverage_id"],
+                    record["run_id"],
+                    record["module"],
+                    record["status"],
+                    record["source_name"],
+                    record["message"],
+                    record["recorded_at"],
+                )
+                for record in records
+            ],
+        )
+
+    def list_module_coverage_history(self, run_id: str) -> list[ModuleCoverage]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                select * from module_coverage
+                where run_id = ?
+                order by recorded_at, coverage_id
+                """,
+                (run_id,),
+            ).fetchall()
+        return [self._module_coverage_from_row(row) for row in rows]
+
+    def list_module_coverage(self, run_id: str) -> list[ModuleCoverage]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                select coverage.*
+                from module_coverage as coverage
+                where coverage.run_id = ?
+                  and coverage.rowid = (
+                      select latest.rowid
+                      from module_coverage as latest
+                      where latest.run_id = coverage.run_id
+                        and latest.module = coverage.module
+                      order by latest.recorded_at desc, latest.rowid desc
+                      limit 1
+                  )
+                order by coverage.module
+                """,
+                (run_id,),
+            ).fetchall()
+        return [self._module_coverage_from_row(row) for row in rows]
+
+    @staticmethod
+    def _module_coverage_from_row(row: sqlite3.Row) -> ModuleCoverage:
+        return ModuleCoverage(
+            coverage_id=row["coverage_id"],
+            run_id=row["run_id"],
+            module=row["module"],
+            status=ModuleCoverageStatus(row["status"]),
+            source_name=row["source_name"],
+            message=row["message"],
+            recorded_at=datetime.fromisoformat(row["recorded_at"]),
+        )
+
     def save_report(self, report: Report) -> None:
         try:
             with self.connection() as connection:
@@ -670,9 +809,14 @@ class BriefingStore:
         facts: list[AtomicFact],
         report: Report,
         target_status: RunStatus,
-        warning_count: int = 0,
+        warning_count: int | None = None,
+        warnings: list[RunWarning] | None = None,
+        module_coverage: list[ModuleCoverage] | None = None,
     ) -> Run:
         now = datetime.now(timezone.utc)
+        run_warnings = warnings or []
+        coverage_records = module_coverage or []
+        next_warning_count = len(run_warnings) if warning_count is None else warning_count
         try:
             with self.connection() as connection:
                 connection.execute("begin immediate")
@@ -692,6 +836,8 @@ class BriefingStore:
                 self._insert_snapshots(connection, snapshots)
                 self._insert_facts(connection, facts)
                 self._insert_report(connection, report)
+                self._insert_run_warnings(connection, run_warnings)
+                self._insert_module_coverage(connection, coverage_records)
                 completed_at = (
                     now.isoformat()
                     if target_status
@@ -708,7 +854,7 @@ class BriefingStore:
                     set status = ?, completed_at = ?, warning_count = ?
                     where run_id = ?
                     """,
-                    (target_status.value, completed_at, warning_count, report.run_id),
+                    (target_status.value, completed_at, next_warning_count, report.run_id),
                 )
                 connection.execute(
                     """
@@ -992,6 +1138,32 @@ create table if not exists facts (
 
 create index if not exists idx_facts_run_id
 on facts (run_id);
+
+create table if not exists run_warnings (
+    warning_id text primary key,
+    run_id text not null,
+    source_name text not null,
+    module text not null,
+    message text not null,
+    detail text,
+    created_at text not null
+);
+
+create index if not exists idx_run_warnings_run_id
+on run_warnings (run_id, created_at, warning_id);
+
+create table if not exists module_coverage (
+    coverage_id text primary key,
+    run_id text not null,
+    module text not null,
+    status text not null,
+    source_name text,
+    message text not null,
+    recorded_at text not null
+);
+
+create index if not exists idx_module_coverage_run_id
+on module_coverage (run_id, module, recorded_at, coverage_id);
 
 create table if not exists reports (
     report_id text primary key,

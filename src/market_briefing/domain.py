@@ -80,6 +80,14 @@ class CandidateReviewStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class ModuleCoverageStatus(StrEnum):
+    COVERED = "covered"
+    NO_UPDATES = "no_updates"
+    PENDING_REVIEW = "pending_review"
+    FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+
+
 class SourceType(StrEnum):
     OFFICIAL = "official"
     EXCHANGE = "exchange"
@@ -211,6 +219,50 @@ class CandidateReviewEvent:
     reviewer_id: str | None
     note: str
     approved_fact_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunWarning:
+    warning_id: str
+    run_id: str
+    source_name: str
+    module: str
+    message: str
+    detail: str | None
+    created_at: datetime
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "warning_id": self.warning_id,
+            "run_id": self.run_id,
+            "source_name": self.source_name,
+            "module": self.module,
+            "message": self.message,
+            "detail": self.detail,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
+class ModuleCoverage:
+    coverage_id: str
+    run_id: str
+    module: str
+    status: ModuleCoverageStatus
+    source_name: str | None
+    message: str
+    recorded_at: datetime
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "coverage_id": self.coverage_id,
+            "run_id": self.run_id,
+            "module": self.module,
+            "status": self.status.value,
+            "source_name": self.source_name,
+            "message": self.message,
+            "recorded_at": self.recorded_at.isoformat(),
+        }
 
 
 @dataclass(frozen=True)

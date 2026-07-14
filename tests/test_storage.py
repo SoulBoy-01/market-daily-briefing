@@ -11,12 +11,15 @@ from market_briefing.domain import (
     EvidenceCandidate,
     FactClassification,
     FactLine,
+    ModuleCoverage,
+    ModuleCoverageStatus,
     RawSnapshot,
     Report,
     ReportSection,
     ReportType,
     Run,
     RunStatus,
+    RunWarning,
     SourceType,
 )
 from market_briefing.storage import (
@@ -362,6 +365,80 @@ def test_rejected_candidate_has_no_approved_fact_id(tmp_path):
     assert rejected.approved_fact_id is None
 
 
+def test_warnings_and_module_coverage_survive_restart_with_latest_projection(tmp_path):
+    database_path = tmp_path / "briefing.sqlite"
+    store = BriefingStore(database_path)
+    store.initialize()
+    created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
+    warning = RunWarning(
+        warning_id="warning-policy-001",
+        run_id="run-observability",
+        source_name="示例交易所",
+        module="policy_regulation",
+        message="详情页检查失败",
+        detail="Traceback: parser field missing",
+        created_at=created_at,
+    )
+    pending = ModuleCoverage(
+        coverage_id="coverage-policy-pending",
+        run_id="run-observability",
+        module="policy_regulation",
+        status=ModuleCoverageStatus.PENDING_REVIEW,
+        source_name="示例交易所",
+        message="发现一条候选项。",
+        recorded_at=created_at,
+    )
+    covered = ModuleCoverage(
+        coverage_id="coverage-policy-covered",
+        run_id="run-observability",
+        module="policy_regulation",
+        status=ModuleCoverageStatus.COVERED,
+        source_name="示例交易所",
+        message="候选项已审核。",
+        recorded_at=datetime(2026, 7, 2, 8, 40, tzinfo=timezone.utc),
+    )
+
+    store.save_run_warnings([warning])
+    store.save_module_coverage([pending, covered])
+    reopened = BriefingStore(database_path)
+    reopened.initialize()
+
+    assert reopened.list_run_warnings("run-observability") == [warning]
+    assert reopened.list_module_coverage_history("run-observability") == [pending, covered]
+    assert reopened.list_module_coverage("run-observability") == [covered]
+
+
+def test_warning_and_coverage_records_are_insert_only(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
+    warning = RunWarning(
+        warning_id="warning-insert-only",
+        run_id="run-insert-only",
+        source_name="示例来源",
+        module="sector_moves",
+        message="板块覆盖缺失",
+        detail=None,
+        created_at=created_at,
+    )
+    coverage = ModuleCoverage(
+        coverage_id="coverage-insert-only",
+        run_id="run-insert-only",
+        module="sector_moves",
+        status=ModuleCoverageStatus.UNSUPPORTED,
+        source_name=None,
+        message="验证版暂未支持。",
+        recorded_at=created_at,
+    )
+    store.save_run_warnings([warning])
+    store.save_module_coverage([coverage])
+
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_run_warnings([warning])
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_module_coverage([coverage])
+
+
 def test_store_closes_connections_after_operations(tmp_path):
     database_path = tmp_path / "briefing.sqlite"
     store = TrackingStore(database_path)
@@ -642,13 +719,36 @@ def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path
         html_path=str(report_files[1]),
         fact_ledger_path=str(report_files[2]),
     )
+    warning = RunWarning(
+        warning_id="warning-integrity",
+        run_id=run.run_id,
+        source_name="Fixture",
+        module="market_temperature",
+        message="市场温度缺失",
+        detail="diagnostic detail",
+        created_at=fetched_at,
+    )
+    coverage = ModuleCoverage(
+        coverage_id="coverage-integrity",
+        run_id=run.run_id,
+        module="market_temperature",
+        status=ModuleCoverageStatus.FAILED,
+        source_name="Fixture",
+        message="市场温度未覆盖。",
+        recorded_at=fetched_at,
+    )
     store.publish_run_bundle(
         snapshots=[snapshot],
         facts=[],
         report=report,
         target_status=RunStatus.COMPLETED,
+        warnings=[warning],
+        module_coverage=[coverage],
     )
 
+    assert store.get_run(run.run_id).warning_count == 1
+    assert store.list_run_warnings(run.run_id) == [warning]
+    assert store.list_module_coverage(run.run_id) == [coverage]
     store.assert_report_integrity(report.report_id)
     snapshot_file.path.write_text("tampered", encoding="utf-8")
 
