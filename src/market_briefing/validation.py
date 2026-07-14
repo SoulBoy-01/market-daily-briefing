@@ -78,6 +78,32 @@ def validate_report_sections(
     return ValidationResult(ok=not errors, errors=errors)
 
 
+def validate_real_publishable_facts(facts: list[AtomicFact]) -> ValidationResult:
+    fact_by_id = {fact.fact_id: fact for fact in facts}
+    errors: list[str] = []
+    for fact in facts:
+        if fact.classification == FactClassification.UNVERIFIED:
+            errors.append(f"real publication rejects UNVERIFIED fact {fact.fact_id}")
+        if fact.classification != FactClassification.INFERENCE:
+            continue
+        if not fact.derived_from_fact_ids:
+            errors.append(f"real inference {fact.fact_id} has no derived facts")
+            continue
+        for derived_fact_id in fact.derived_from_fact_ids:
+            derived_fact = fact_by_id.get(derived_fact_id)
+            if derived_fact is None:
+                errors.append(
+                    f"real inference {fact.fact_id} derives from missing fact_id "
+                    f"{derived_fact_id}"
+                )
+            elif derived_fact.classification != FactClassification.FACT:
+                errors.append(
+                    f"real inference {fact.fact_id} derives from non-FACT fact_id "
+                    f"{derived_fact_id}"
+                )
+    return ValidationResult(ok=not errors, errors=errors)
+
+
 def _classification_errors(
     section_id: str,
     fact: AtomicFact,
