@@ -2,6 +2,7 @@ import pytest
 
 from market_briefing.audit import (
     UnsafeAuditPathError,
+    recover_orphaned_publication_directories,
     run_directory,
     verify_snapshot_hash,
     write_snapshot_text,
@@ -36,3 +37,54 @@ def test_run_directory_stays_under_resolved_root(tmp_path):
     path = run_directory(root, "2026-07-02", "safe-run")
 
     assert path == root.resolve() / "2026-07-02" / "safe-run"
+
+
+def test_recovery_moves_unreferenced_final_directories_to_diagnostics(tmp_path):
+    raw_dir = tmp_path / "raw"
+    reports_dir = tmp_path / "reports"
+    diagnostics_dir = tmp_path / "diagnostics"
+    raw_run = raw_dir / "2026-07-02" / "orphan-run"
+    report_run = reports_dir / "2026-07-02" / "after_close" / "orphan-run"
+    raw_run.mkdir(parents=True)
+    report_run.mkdir(parents=True)
+    (raw_run / "snapshot.json").write_text("{}", encoding="utf-8")
+    (report_run / "briefing.md").write_text("orphan", encoding="utf-8")
+
+    recovered = recover_orphaned_publication_directories(
+        raw_dir=raw_dir,
+        reports_dir=reports_dir,
+        diagnostics_dir=diagnostics_dir,
+        published_run_ids=set(),
+    )
+
+    assert recovered == {"orphan-run"}
+    assert not raw_run.exists()
+    assert not report_run.exists()
+    assert (
+        diagnostics_dir / "2026-07-02" / "orphan-run" / "orphan-raw" / "snapshot.json"
+    ).is_file()
+    assert (
+        diagnostics_dir
+        / "2026-07-02"
+        / "orphan-run"
+        / "orphan-report-after_close"
+        / "briefing.md"
+    ).is_file()
+
+
+def test_recovery_preserves_directories_referenced_by_published_run(tmp_path):
+    raw_run = tmp_path / "raw" / "2026-07-02" / "published-run"
+    report_run = tmp_path / "reports" / "2026-07-02" / "after_close" / "published-run"
+    raw_run.mkdir(parents=True)
+    report_run.mkdir(parents=True)
+
+    recovered = recover_orphaned_publication_directories(
+        raw_dir=tmp_path / "raw",
+        reports_dir=tmp_path / "reports",
+        diagnostics_dir=tmp_path / "diagnostics",
+        published_run_ids={"published-run"},
+    )
+
+    assert recovered == set()
+    assert raw_run.is_dir()
+    assert report_run.is_dir()

@@ -6,7 +6,12 @@ import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from market_briefing.audit import move_run_directory, rebase_audit_path
+from market_briefing.audit import (
+    move_run_directory,
+    rebase_audit_path,
+    recover_orphaned_publication_directories,
+    run_directory,
+)
 from market_briefing.collectors.fixtures import FixtureCollector
 from market_briefing.config import AppConfig, load_config
 from market_briefing.domain import AtomicFact, Report, ReportType, Run, RunStatus
@@ -52,6 +57,12 @@ def run_fixture_pipeline(
         enabled_modules=enabled_modules,
     )
     store.create_run(run)
+    recover_orphaned_publication_directories(
+        raw_dir=config.raw_dir,
+        reports_dir=config.reports_dir,
+        diagnostics_dir=config.effective_diagnostics_dir,
+        published_run_ids=store.published_run_ids(),
+    )
     store.transition_run(run.run_id, RunStatus.RUNNING)
 
     try:
@@ -116,15 +127,16 @@ def run_fixture_pipeline(
         )
         return PipelineResult(report=None, validation_errors=validation.errors)
 
-    moved = move_run_directory(
+    source_run_dir = run_directory(
         config.effective_staging_dir,
+        request.report_date,
+        request.run_id,
+    )
+    destination_run_dir = run_directory(
         config.raw_dir,
         request.report_date,
         request.run_id,
     )
-    if moved is None:
-        raise RuntimeError(f"run {request.run_id} produced no staging directory")
-    source_run_dir, destination_run_dir = moved
     snapshots = [
         replace(
             snapshot,
@@ -148,26 +160,97 @@ def run_fixture_pipeline(
         for fact in facts
     ]
 
-    paths.report_dir.mkdir(parents=True, exist_ok=True)
-    for snapshot in snapshots:
-        store.save_snapshot(snapshot)
-    store.save_facts(facts)
-
-    markdown = render_markdown(report, facts)
-    paths.markdown_path.write_text(markdown, encoding="utf-8")
-    paths.html_path.write_text(render_html(markdown), encoding="utf-8")
-    paths.fact_ledger_path.write_text(
-        json.dumps(
-            [fact.to_record() for fact in facts],
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    staged_paths = build_report_paths(
+        reports_dir=config.effective_staging_dir / "reports",
+        report_date=request.report_date,
+        report_type=request.report_type,
+        run_id=request.run_id,
     )
+    try:
+        staged_paths.report_dir.mkdir(parents=True, exist_ok=False)
+        markdown = render_markdown(report, facts)
+        staged_paths.markdown_path.write_text(markdown, encoding="utf-8")
+        staged_paths.html_path.write_text(render_html(markdown), encoding="utf-8")
+        staged_paths.fact_ledger_path.write_text(
+            json.dumps(
+                [fact.to_record() for fact in facts],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
-    store.save_report(report)
-    store.transition_run(run.run_id, RunStatus.COMPLETED, warning_count=0)
+        moved = move_run_directory(
+            config.effective_staging_dir,
+            config.raw_dir,
+            request.report_date,
+            request.run_id,
+        )
+        if moved is None:
+            raise RuntimeError(f"run {request.run_id} produced no staging directory")
+        if paths.report_dir.exists():
+            raise FileExistsError(paths.report_dir)
+        paths.report_dir.parent.mkdir(parents=True, exist_ok=True)
+        staged_paths.report_dir.rename(paths.report_dir)
+        store.publish_run_bundle(
+            snapshots=snapshots,
+            facts=facts,
+            report=report,
+            target_status=RunStatus.COMPLETED,
+            warning_count=0,
+        )
+    except Exception as exc:
+        _recover_failed_publication(
+            config=config,
+            store=store,
+            request=request,
+            staged_report_dir=staged_paths.report_dir,
+        )
+        current_run = store.get_run(run.run_id)
+        if current_run is not None and current_run.status == RunStatus.RUNNING:
+            store.transition_run(
+                run.run_id,
+                RunStatus.FAILED,
+                error_message=str(exc),
+            )
+        raise
     return PipelineResult(report=report, validation_errors=validation.errors)
+
+
+def _recover_failed_publication(
+    *,
+    config: AppConfig,
+    store: BriefingStore,
+    request: PipelineRequest,
+    staged_report_dir: Path,
+) -> None:
+    recover_orphaned_publication_directories(
+        raw_dir=config.raw_dir,
+        reports_dir=config.reports_dir,
+        diagnostics_dir=config.effective_diagnostics_dir,
+        published_run_ids=store.published_run_ids(),
+    )
+    diagnostics_run_dir = run_directory(
+        config.effective_diagnostics_dir,
+        request.report_date,
+        request.run_id,
+    )
+    staged_raw_dir = run_directory(
+        config.effective_staging_dir,
+        request.report_date,
+        request.run_id,
+    )
+    for source, label in (
+        (staged_raw_dir, "failed-staging-raw"),
+        (staged_report_dir, f"failed-staging-report-{request.report_type.value}"),
+    ):
+        if not source.exists():
+            continue
+        destination = diagnostics_run_dir / label
+        if destination.exists():
+            raise FileExistsError(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
 
 
 def _scope_facts_to_run(facts: list[AtomicFact], run_id: str) -> list[AtomicFact]:

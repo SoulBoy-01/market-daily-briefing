@@ -12,6 +12,11 @@ from market_briefing.storage import BriefingStore
 from market_briefing.storage import RunAlreadyExistsError
 
 
+class FailingPublishStore(BriefingStore):
+    def publish_run_bundle(self, **kwargs):
+        raise RuntimeError("injected publish failure")
+
+
 def _config(tmp_path):
     return AppConfig(
         database_path=tmp_path / "briefing.sqlite",
@@ -496,6 +501,39 @@ def test_fixture_pipeline_moves_partial_collection_to_diagnostics_on_error(tmp_p
         config.effective_diagnostics_dir / "2026-07-02" / "run-collection-error"
     )
     assert [path.name for path in diagnostics_dir.iterdir()] == ["001-market_indices.json"]
+
+
+def test_fixture_pipeline_recovers_final_directories_when_database_publish_fails(tmp_path):
+    config = _config(tmp_path)
+    store = FailingPublishStore(config.database_path)
+    store.initialize()
+
+    with pytest.raises(RuntimeError, match="injected publish failure"):
+        run_fixture_pipeline(
+            PipelineRequest(
+                run_id="run-publish-failure",
+                report_date="2026-07-02",
+                report_type=ReportType.AFTER_CLOSE,
+                fixture_path=Path("tests/fixtures/after_close_sources.json"),
+            ),
+            config=config,
+            store=store,
+        )
+
+    run = store.get_run("run-publish-failure")
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert store.list_snapshots(run.run_id) == []
+    assert store.list_facts(run.run_id) == []
+    with pytest.raises(KeyError):
+        store.get_report("report-run-publish-failure")
+    assert not (config.raw_dir / "2026-07-02" / run.run_id).exists()
+    assert not (
+        config.reports_dir / "2026-07-02" / "after_close" / run.run_id
+    ).exists()
+    diagnostics = config.effective_diagnostics_dir / "2026-07-02" / run.run_id
+    assert (diagnostics / "orphan-raw").is_dir()
+    assert (diagnostics / "orphan-report-after_close").is_dir()
 
 
 def test_fixture_pipeline_generates_pre_open_report(tmp_path):

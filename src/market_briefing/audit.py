@@ -73,3 +73,77 @@ def rebase_audit_path(path: str, source_run_dir: Path, destination_run_dir: Path
     except ValueError as exc:
         raise UnsafeAuditPathError(f"snapshot path is outside run directory: {path}") from exc
     return str(destination_run_dir.resolve() / relative_path)
+
+
+def recover_orphaned_publication_directories(
+    raw_dir: Path,
+    reports_dir: Path,
+    diagnostics_dir: Path,
+    published_run_ids: set[str],
+) -> set[str]:
+    recovered: set[str] = set()
+    if raw_dir.exists():
+        for date_dir in _child_directories(raw_dir):
+            for run_dir in _child_directories(date_dir):
+                run_id = run_dir.name
+                expected = run_directory(raw_dir, date_dir.name, run_id)
+                if run_dir.resolve() != expected:
+                    raise UnsafeAuditPathError(f"unexpected raw run path: {run_dir}")
+                if run_id not in published_run_ids:
+                    _move_orphan(
+                        run_dir,
+                        run_directory(diagnostics_dir, date_dir.name, run_id) / "orphan-raw",
+                    )
+                    recovered.add(run_id)
+
+    if reports_dir.exists():
+        for date_dir in _child_directories(reports_dir):
+            _validate_report_date(date_dir.name)
+            for report_type_dir in _child_directories(date_dir):
+                _validate_path_component(report_type_dir.name)
+                for run_dir in _child_directories(report_type_dir):
+                    run_id = run_dir.name
+                    _validate_path_component(run_id)
+                    expected = (
+                        reports_dir.resolve()
+                        / date_dir.name
+                        / report_type_dir.name
+                        / run_id
+                    ).resolve()
+                    if run_dir.resolve() != expected or not expected.is_relative_to(
+                        reports_dir.resolve()
+                    ):
+                        raise UnsafeAuditPathError(f"unexpected report run path: {run_dir}")
+                    if run_id not in published_run_ids:
+                        _move_orphan(
+                            run_dir,
+                            run_directory(diagnostics_dir, date_dir.name, run_id)
+                            / f"orphan-report-{report_type_dir.name}",
+                        )
+                        recovered.add(run_id)
+    return recovered
+
+
+def _child_directories(root: Path) -> list[Path]:
+    return sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name)
+
+
+def _validate_report_date(value: str) -> None:
+    try:
+        parsed_date = date.fromisoformat(value)
+    except ValueError as exc:
+        raise UnsafeAuditPathError(f"invalid report date: {value}") from exc
+    if parsed_date.isoformat() != value:
+        raise UnsafeAuditPathError(f"invalid report date: {value}")
+
+
+def _validate_path_component(value: str) -> None:
+    if not SAFE_RUN_ID_RE.fullmatch(value):
+        raise UnsafeAuditPathError(f"unsafe audit path component: {value}")
+
+
+def _move_orphan(source: Path, destination: Path) -> None:
+    if destination.exists():
+        raise FileExistsError(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(destination)
