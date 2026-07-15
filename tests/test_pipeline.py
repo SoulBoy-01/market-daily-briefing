@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from market_briefing.audit import UnsafeAuditPathError
 from market_briefing.config import AppConfig
 from market_briefing.domain import FeedbackEntry, ReportType, RunStatus
 from market_briefing.pipeline import PipelineRequest, main, run_fixture_pipeline
@@ -239,6 +240,37 @@ def test_fixture_pipeline_rejects_duplicate_run_before_overwriting_outputs(tmp_p
         RunStatus.RUNNING,
         RunStatus.COMPLETED,
     ]
+
+
+@pytest.mark.parametrize(
+    ("run_id", "report_date"),
+    [
+        ("../escape", "2026-07-02"),
+        ("invalid-date", "2026-02-30"),
+    ],
+)
+def test_fixture_pipeline_rejects_unsafe_run_path_before_creating_run(
+    tmp_path,
+    run_id,
+    report_date,
+):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+
+    with pytest.raises(UnsafeAuditPathError):
+        run_fixture_pipeline(
+            PipelineRequest(
+                run_id=run_id,
+                report_date=report_date,
+                report_type=ReportType.AFTER_CLOSE,
+                fixture_path=Path("tests/fixtures/after_close_sources.json"),
+            ),
+            config=config,
+            store=store,
+        )
+
+    assert store.get_run(run_id) is None
 
 
 def test_fixture_pipeline_carries_previous_feedback_into_next_report(tmp_path):
