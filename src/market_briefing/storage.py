@@ -31,6 +31,7 @@ from market_briefing.domain import (
     SourceType,
     can_transition_run,
 )
+from market_briefing.validation import validate_report_sections
 
 
 class RunAlreadyExistsError(ValueError):
@@ -49,6 +50,10 @@ class AuditIntegrityError(RuntimeError):
     pass
 
 
+class InvalidPublicationBundleError(ValueError):
+    pass
+
+
 class CandidateAlreadyExistsError(ValueError):
     pass
 
@@ -59,6 +64,13 @@ class CandidateAlreadyReviewedError(ValueError):
 
 class InvalidCandidateReviewError(ValueError):
     pass
+
+
+TERMINAL_RUN_STATUSES = {
+    RunStatus.COMPLETED,
+    RunStatus.COMPLETED_WITH_WARNINGS,
+    RunStatus.FAILED,
+}
 
 
 @dataclass(frozen=True)
@@ -141,6 +153,36 @@ class BriefingStore:
             connection.execute("alter table facts add column source_candidate_id text")
         if "source_snapshot_id" not in fact_columns:
             connection.execute("alter table facts add column source_snapshot_id text")
+        report_columns = {
+            row["name"] for row in connection.execute("pragma table_info(reports)").fetchall()
+        }
+        if "published_at" not in report_columns:
+            connection.execute("alter table reports add column published_at text")
+            connection.execute(
+                """
+                update reports
+                set published_at = (
+                    select runs.completed_at
+                    from runs
+                    where runs.run_id = reports.run_id
+                      and runs.status in (?, ?)
+                      and runs.completed_at is not null
+                )
+                where exists (
+                    select 1
+                    from runs
+                    where runs.run_id = reports.run_id
+                      and runs.status in (?, ?)
+                      and runs.completed_at is not null
+                )
+                """,
+                (
+                    RunStatus.COMPLETED.value,
+                    RunStatus.COMPLETED_WITH_WARNINGS.value,
+                    RunStatus.COMPLETED.value,
+                    RunStatus.COMPLETED_WITH_WARNINGS.value,
+                ),
+            )
         connection.execute(
             """
             insert into run_events (run_id, from_status, to_status, created_at)
@@ -300,6 +342,7 @@ class BriefingStore:
     def save_snapshot(self, snapshot: RawSnapshot) -> None:
         try:
             with self.connection() as connection:
+                self._assert_run_accepts_ledger_append(connection, snapshot.run_id)
                 self._insert_snapshots(connection, [snapshot])
         except sqlite3.IntegrityError as exc:
             raise PublishedRecordExistsError(snapshot.snapshot_id) from exc
@@ -559,6 +602,8 @@ class BriefingStore:
     def save_facts(self, facts: list[AtomicFact]) -> None:
         try:
             with self.connection() as connection:
+                for run_id in {fact.run_id for fact in facts}:
+                    self._assert_run_accepts_ledger_append(connection, run_id)
                 self._insert_facts(connection, facts)
         except sqlite3.IntegrityError as exc:
             raise PublishedRecordExistsError("fact") from exc
@@ -639,6 +684,8 @@ class BriefingStore:
     def save_run_warnings(self, warnings: list[RunWarning]) -> None:
         try:
             with self.connection() as connection:
+                for run_id in {warning.run_id for warning in warnings}:
+                    self._assert_run_accepts_ledger_append(connection, run_id)
                 self._insert_run_warnings(connection, warnings)
         except sqlite3.IntegrityError as exc:
             raise PublishedRecordExistsError("run warning") from exc
@@ -696,6 +743,8 @@ class BriefingStore:
     def save_module_coverage(self, coverage: list[ModuleCoverage]) -> None:
         try:
             with self.connection() as connection:
+                for run_id in {item.run_id for item in coverage}:
+                    self._assert_run_accepts_ledger_append(connection, run_id)
                 self._insert_module_coverage(connection, coverage)
         except sqlite3.IntegrityError as exc:
             raise PublishedRecordExistsError("module coverage") from exc
@@ -775,19 +824,25 @@ class BriefingStore:
     def save_report(self, report: Report) -> None:
         try:
             with self.connection() as connection:
+                self._assert_run_accepts_ledger_append(connection, report.run_id)
                 self._insert_report(connection, report)
         except sqlite3.IntegrityError as exc:
             raise PublishedRecordExistsError(report.report_id) from exc
 
     @staticmethod
-    def _insert_report(connection: sqlite3.Connection, report: Report) -> None:
+    def _insert_report(
+        connection: sqlite3.Connection,
+        report: Report,
+        *,
+        published_at: datetime | None = None,
+    ) -> None:
         connection.execute(
             """
             insert into reports (
                 report_id, run_id, report_date, report_type, title,
-                sections, markdown_path, html_path, fact_ledger_path
+                sections, markdown_path, html_path, fact_ledger_path, published_at
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.report_id,
@@ -799,6 +854,7 @@ class BriefingStore:
                 report.markdown_path,
                 report.html_path,
                 report.fact_ledger_path,
+                published_at.isoformat() if published_at else None,
             ),
         )
 
@@ -817,6 +873,15 @@ class BriefingStore:
         run_warnings = warnings or []
         coverage_records = module_coverage or []
         next_warning_count = len(run_warnings) if warning_count is None else warning_count
+        self._validate_publication_bundle(
+            snapshots=snapshots,
+            facts=facts,
+            report=report,
+            target_status=target_status,
+            warning_count=next_warning_count,
+            warnings=run_warnings,
+            module_coverage=coverage_records,
+        )
         try:
             with self.connection() as connection:
                 connection.execute("begin immediate")
@@ -832,10 +897,11 @@ class BriefingStore:
                         f"cannot transition run {report.run_id} from {current_status.value} "
                         f"to {target_status.value}"
                     )
+                self._assert_run_has_no_normal_ledger_records(connection, report.run_id)
 
                 self._insert_snapshots(connection, snapshots)
                 self._insert_facts(connection, facts)
-                self._insert_report(connection, report)
+                self._insert_report(connection, report, published_at=now)
                 self._insert_run_warnings(connection, run_warnings)
                 self._insert_module_coverage(connection, coverage_records)
                 completed_at = (
@@ -876,6 +942,163 @@ class BriefingStore:
             raise KeyError(report.run_id)
         return run
 
+    @staticmethod
+    def _assert_run_accepts_ledger_append(
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> None:
+        row = connection.execute(
+            "select status from runs where run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is not None and RunStatus(row["status"]) in TERMINAL_RUN_STATUSES:
+            raise PublishedRecordExistsError(
+                f"run {run_id} is terminal and cannot accept ledger records"
+            )
+
+    @staticmethod
+    def _assert_run_has_no_normal_ledger_records(
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> None:
+        table_names = (
+            "source_snapshots",
+            "facts",
+            "reports",
+            "run_warnings",
+            "module_coverage",
+        )
+        occupied_tables = [
+            table_name
+            for table_name in table_names
+            if connection.execute(
+                f"select 1 from {table_name} where run_id = ? limit 1",
+                (run_id,),
+            ).fetchone()
+            is not None
+        ]
+        if occupied_tables:
+            raise InvalidPublicationBundleError(
+                f"run {run_id} already has normal ledger records: "
+                f"{', '.join(occupied_tables)}"
+            )
+
+    def _validate_publication_bundle(
+        self,
+        *,
+        snapshots: list[RawSnapshot],
+        facts: list[AtomicFact],
+        report: Report,
+        target_status: RunStatus,
+        warning_count: int,
+        warnings: list[RunWarning],
+        module_coverage: list[ModuleCoverage],
+    ) -> None:
+        if target_status not in {
+            RunStatus.COMPLETED,
+            RunStatus.COMPLETED_WITH_WARNINGS,
+        }:
+            raise InvalidPublicationBundleError(
+                f"publication target must be a completed status: {target_status.value}"
+            )
+        if warning_count != len(warnings):
+            raise InvalidPublicationBundleError(
+                f"warning_count {warning_count} does not match {len(warnings)} warnings"
+            )
+        expected_status = (
+            RunStatus.COMPLETED_WITH_WARNINGS if warnings else RunStatus.COMPLETED
+        )
+        if target_status != expected_status:
+            raise InvalidPublicationBundleError(
+                f"publication with {len(warnings)} warnings requires "
+                f"{expected_status.value}"
+            )
+        run = self.get_run(report.run_id)
+        if run is None:
+            raise KeyError(report.run_id)
+        if report.report_date != run.report_date or report.report_type != run.report_type:
+            raise InvalidPublicationBundleError(
+                f"report {report.report_id} does not match run {run.run_id}"
+            )
+        for label, path in (
+            ("markdown", report.markdown_path),
+            ("html", report.html_path),
+            ("fact ledger", report.fact_ledger_path),
+        ):
+            if not Path(path).is_file():
+                raise InvalidPublicationBundleError(
+                    f"missing {label} file for {report.report_id}: {path}"
+                )
+
+        snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
+        if len(snapshot_by_id) != len(snapshots):
+            raise InvalidPublicationBundleError("publication bundle contains duplicate snapshot IDs")
+        snapshot_by_path = {str(Path(snapshot.raw_path).resolve()): snapshot for snapshot in snapshots}
+        for snapshot in snapshots:
+            if snapshot.run_id != report.run_id:
+                raise InvalidPublicationBundleError(
+                    f"snapshot {snapshot.snapshot_id} belongs to run {snapshot.run_id}"
+                )
+            if not verify_snapshot_hash(Path(snapshot.raw_path), snapshot.content_sha256):
+                raise InvalidPublicationBundleError(
+                    f"snapshot integrity check failed for {snapshot.snapshot_id}"
+                )
+
+        fact_ids = {fact.fact_id for fact in facts}
+        if len(fact_ids) != len(facts):
+            raise InvalidPublicationBundleError("publication bundle contains duplicate fact IDs")
+        for fact in facts:
+            if (
+                fact.run_id != report.run_id
+                or fact.report_date != report.report_date
+                or fact.report_type != report.report_type
+            ):
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} does not match report {report.report_id}"
+                )
+            snapshot = snapshot_by_path.get(str(Path(fact.raw_snapshot_path).resolve()))
+            if snapshot is None:
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} references missing snapshot path "
+                    f"{fact.raw_snapshot_path}"
+                )
+            if fact.source_snapshot_id and fact.source_snapshot_id != snapshot.snapshot_id:
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} source snapshot does not match its raw path"
+                )
+            missing_derived_fact_ids = set(fact.derived_from_fact_ids) - fact_ids
+            if missing_derived_fact_ids:
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} derives from missing facts: "
+                    f"{', '.join(sorted(missing_derived_fact_ids))}"
+                )
+        report_fact_ids = report.all_fact_ids() | {
+            fact_line.fact_id
+            for section in report.sections
+            for fact_line in section.fact_lines
+        }
+        missing_report_fact_ids = report_fact_ids - fact_ids
+        if missing_report_fact_ids:
+            raise InvalidPublicationBundleError(
+                f"report {report.report_id} cites missing facts: "
+                f"{', '.join(sorted(missing_report_fact_ids))}"
+            )
+        report_validation = validate_report_sections(list(report.sections), facts)
+        if not report_validation.ok:
+            raise InvalidPublicationBundleError(
+                "report validation failed: " + "; ".join(report_validation.errors)
+            )
+        for warning in warnings:
+            if warning.run_id != report.run_id:
+                raise InvalidPublicationBundleError(
+                    f"warning {warning.warning_id} belongs to run {warning.run_id}"
+                )
+        for coverage in module_coverage:
+            if coverage.run_id != report.run_id:
+                raise InvalidPublicationBundleError(
+                    f"coverage {coverage.coverage_id} belongs to run {coverage.run_id}"
+                )
+
     def published_run_ids(self) -> set[str]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -883,20 +1106,15 @@ class BriefingStore:
                 select distinct reports.run_id
                 from reports
                 join runs on runs.run_id = reports.run_id
-                where runs.status in (?, ?)
+                where reports.published_at is not null
+                  and runs.status in (?, ?)
                 """,
                 (RunStatus.COMPLETED.value, RunStatus.COMPLETED_WITH_WARNINGS.value),
             ).fetchall()
         return {row["run_id"] for row in rows}
 
     def assert_report_integrity(self, report_id: str) -> None:
-        report = self.get_report(report_id)
-        run = self.get_run(report.run_id)
-        if run is None or run.status not in {
-            RunStatus.COMPLETED,
-            RunStatus.COMPLETED_WITH_WARNINGS,
-        }:
-            return
+        report = self.get_published_report(report_id)
 
         for label, path in (
             ("markdown", report.markdown_path),
@@ -905,11 +1123,27 @@ class BriefingStore:
         ):
             if not Path(path).is_file():
                 raise AuditIntegrityError(f"missing {label} file for {report.report_id}: {path}")
-        for snapshot in self.list_snapshots(report.run_id):
+        snapshots = self.list_snapshots(report.run_id)
+        snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
+        snapshot_by_path = {str(Path(snapshot.raw_path).resolve()): snapshot for snapshot in snapshots}
+        for snapshot in snapshots:
             if not verify_snapshot_hash(Path(snapshot.raw_path), snapshot.content_sha256):
                 raise AuditIntegrityError(
                     f"snapshot integrity check failed for {snapshot.snapshot_id}"
                 )
+        for fact in self.list_facts(report.run_id):
+            snapshot = snapshot_by_path.get(str(Path(fact.raw_snapshot_path).resolve()))
+            if snapshot is None:
+                raise AuditIntegrityError(
+                    f"fact {fact.fact_id} references missing snapshot path "
+                    f"{fact.raw_snapshot_path}"
+                )
+            if fact.source_snapshot_id:
+                linked_snapshot = snapshot_by_id.get(fact.source_snapshot_id)
+                if linked_snapshot is None or linked_snapshot.snapshot_id != snapshot.snapshot_id:
+                    raise AuditIntegrityError(
+                        f"fact {fact.fact_id} source snapshot does not match its raw path"
+                    )
 
     def get_report(self, report_id: str) -> Report:
         with self.connection() as connection:
@@ -933,13 +1167,36 @@ class BriefingStore:
             fact_ledger_path=row["fact_ledger_path"],
         )
 
+    def get_published_report(self, report_id: str) -> Report:
+        with self.connection() as connection:
+            row = connection.execute(
+                """
+                select reports.report_id
+                from reports
+                join runs on runs.run_id = reports.run_id
+                where reports.report_id = ?
+                  and reports.published_at is not null
+                  and runs.status in (?, ?)
+                """,
+                (
+                    report_id,
+                    RunStatus.COMPLETED.value,
+                    RunStatus.COMPLETED_WITH_WARNINGS.value,
+                ),
+            ).fetchone()
+        if row is None:
+            raise KeyError(report_id)
+        return self.get_report(row["report_id"])
+
     def list_reports(self) -> list[Report]:
         with self.connection() as connection:
             rows = connection.execute(
                 """
                 select reports.report_id
                 from reports
-                left join runs on runs.run_id = reports.run_id
+                join runs on runs.run_id = reports.run_id
+                where reports.published_at is not null
+                  and runs.status in (?, ?)
                 order by
                     reports.report_date desc,
                     coalesce(
@@ -948,9 +1205,10 @@ class BriefingStore:
                         reports.report_date || 'T00:00:00'
                     ) desc,
                     reports.report_id desc
-                """
+                """,
+                (RunStatus.COMPLETED.value, RunStatus.COMPLETED_WITH_WARNINGS.value),
             ).fetchall()
-        return [self.get_report(row["report_id"]) for row in rows]
+        return [self.get_published_report(row["report_id"]) for row in rows]
 
     def latest_report(self) -> Report | None:
         reports = self.list_reports()
@@ -1174,7 +1432,8 @@ create table if not exists reports (
     sections text not null,
     markdown_path text not null,
     html_path text not null,
-    fact_ledger_path text not null
+    fact_ledger_path text not null,
+    published_at text
 );
 
 create table if not exists feedback (

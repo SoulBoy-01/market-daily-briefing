@@ -27,6 +27,7 @@ from market_briefing.storage import (
     BriefingStore,
     CandidateAlreadyExistsError,
     CandidateAlreadyReviewedError,
+    InvalidPublicationBundleError,
     InvalidRunTransitionError,
     RunAlreadyExistsError,
     PublishedRecordExistsError,
@@ -63,6 +64,78 @@ def _candidate(candidate_id: str = "candidate-001") -> EvidenceCandidate:
         suggested_classification=FactClassification.FACT,
         created_at=datetime(2026, 7, 2, 8, 5, tzinfo=timezone.utc),
     )
+
+
+def _publication_material(tmp_path, run: Run, suffix: str = ""):
+    fetched_at = datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc)
+    snapshot_file = write_snapshot_text(tmp_path / f"snapshot{suffix}.json", "{}")
+    snapshot = RawSnapshot(
+        snapshot_id=f"snapshot{suffix}",
+        run_id=run.run_id,
+        module="market_indices",
+        source_name="Fixture",
+        source_url=f"fixture://snapshot{suffix}",
+        source_type=SourceType.DATA_API,
+        fetched_at=fetched_at,
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    fact = AtomicFact(
+        fact_id=f"fact{suffix}",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        module="market_indices",
+        claim="Publication material fact.",
+        classification=FactClassification.FACT,
+        source_name="Fixture",
+        source_url=f"fixture://snapshot{suffix}",
+        source_type=SourceType.DATA_API,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path=str(snapshot_file.path),
+        source_snapshot_id=snapshot.snapshot_id,
+    )
+    report_files = [
+        tmp_path / f"report{suffix}.md",
+        tmp_path / f"report{suffix}.html",
+        tmp_path / f"report{suffix}.json",
+    ]
+    for report_file in report_files:
+        report_file.write_text("report artifact", encoding="utf-8")
+    report = Report(
+        report_id=f"report{suffix}",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Publication material report",
+        sections=[],
+        markdown_path=str(report_files[0]),
+        html_path=str(report_files[1]),
+        fact_ledger_path=str(report_files[2]),
+    )
+    warning = RunWarning(
+        warning_id=f"warning{suffix}",
+        run_id=run.run_id,
+        source_name="Fixture",
+        module="market_temperature",
+        message="Publication warning",
+        detail=None,
+        created_at=fetched_at,
+    )
+    coverage = ModuleCoverage(
+        coverage_id=f"coverage{suffix}",
+        run_id=run.run_id,
+        module="market_temperature",
+        status=ModuleCoverageStatus.FAILED,
+        source_name="Fixture",
+        message="Publication coverage",
+        recorded_at=fetched_at,
+    )
+    return snapshot, fact, report, warning, coverage
 
 
 def test_store_initializes_schema_and_round_trips_run(tmp_path):
@@ -298,6 +371,140 @@ def test_initialize_upgrades_legacy_facts_with_candidate_audit_links(tmp_path):
     fact = store.list_facts("legacy-run")[0]
     assert fact.source_candidate_id is None
     assert fact.source_snapshot_id is None
+
+
+def test_initialize_backfills_only_legacy_terminal_reports_as_published(tmp_path):
+    database_path = tmp_path / "legacy-reports.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            create table runs (
+                run_id text primary key,
+                report_date text not null,
+                report_type text not null,
+                enabled_modules text not null,
+                status text not null,
+                created_at text not null,
+                started_at text,
+                completed_at text,
+                warning_count integer not null default 0,
+                error_message text
+            );
+            create table reports (
+                report_id text primary key,
+                run_id text not null,
+                report_date text not null,
+                report_type text not null,
+                title text not null,
+                sections text not null,
+                markdown_path text not null,
+                html_path text not null,
+                fact_ledger_path text not null
+            );
+            """
+        )
+        connection.executemany(
+            "insert into runs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "legacy-completed",
+                    "2026-07-01",
+                    "after_close",
+                    "[]",
+                    "completed",
+                    "2026-07-01T08:00:00+00:00",
+                    "2026-07-01T08:01:00+00:00",
+                    "2026-07-01T08:05:00+00:00",
+                    0,
+                    None,
+                ),
+                (
+                    "legacy-incomplete-terminal",
+                    "2026-07-01",
+                    "after_close",
+                    "[]",
+                    "completed",
+                    "2026-07-01T08:30:00+00:00",
+                    "2026-07-01T08:31:00+00:00",
+                    None,
+                    0,
+                    None,
+                ),
+                (
+                    "legacy-running",
+                    "2026-07-01",
+                    "after_close",
+                    "[]",
+                    "running",
+                    "2026-07-01T09:00:00+00:00",
+                    "2026-07-01T09:01:00+00:00",
+                    None,
+                    0,
+                    None,
+                ),
+            ],
+        )
+        connection.executemany(
+            "insert into reports values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "legacy-visible",
+                    "legacy-completed",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy completed report",
+                    "[]",
+                    "legacy-visible.md",
+                    "legacy-visible.html",
+                    "legacy-visible.json",
+                ),
+                (
+                    "legacy-hidden-running",
+                    "legacy-running",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy running report",
+                    "[]",
+                    "legacy-running.md",
+                    "legacy-running.html",
+                    "legacy-running.json",
+                ),
+                (
+                    "legacy-hidden-incomplete-terminal",
+                    "legacy-incomplete-terminal",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy incomplete terminal report",
+                    "[]",
+                    "legacy-incomplete.md",
+                    "legacy-incomplete.html",
+                    "legacy-incomplete.json",
+                ),
+                (
+                    "legacy-hidden-orphan",
+                    "legacy-missing",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy orphan report",
+                    "[]",
+                    "legacy-orphan.md",
+                    "legacy-orphan.html",
+                    "legacy-orphan.json",
+                ),
+            ],
+        )
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    assert [report.report_id for report in store.list_reports()] == ["legacy-visible"]
+    assert store.get_published_report("legacy-visible").title == "Legacy completed report"
+    with pytest.raises(KeyError):
+        store.get_published_report("legacy-hidden-running")
+    with pytest.raises(KeyError):
+        store.get_published_report("legacy-hidden-incomplete-terminal")
+    with pytest.raises(KeyError):
+        store.get_published_report("legacy-hidden-orphan")
 
 
 def test_candidate_is_insert_only_and_starts_with_pending_review_event(tmp_path):
@@ -659,6 +866,8 @@ def test_publish_run_bundle_rolls_back_all_visible_records_on_conflict(tmp_path)
         html_path=str(tmp_path / "bundle.html"),
         fact_ledger_path=str(tmp_path / "bundle.json"),
     )
+    for path in (report.markdown_path, report.html_path, report.fact_ledger_path):
+        tmp_path.joinpath(path).write_text("bundle artifact", encoding="utf-8")
 
     with pytest.raises(PublishedRecordExistsError):
         store.publish_run_bundle(
@@ -677,6 +886,388 @@ def test_publish_run_bundle_rolls_back_all_visible_records_on_conflict(tmp_path)
         RunStatus.CREATED,
         RunStatus.RUNNING,
     ]
+
+
+@pytest.mark.parametrize(
+    "record_kind",
+    ["snapshot", "fact", "report", "warning", "coverage"],
+)
+def test_publish_bundle_rejects_preexisting_normal_ledger_records_for_run(
+    tmp_path,
+    record_kind,
+):
+    store = BriefingStore(tmp_path / f"{record_kind}.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id=f"run-preexisting-{record_kind}",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, warning, coverage = _publication_material(
+        tmp_path,
+        run,
+        suffix=f"-{record_kind}",
+    )
+    writers = {
+        "snapshot": lambda: store.save_snapshot(snapshot),
+        "fact": lambda: store.save_facts([fact]),
+        "report": lambda: store.save_report(replace(report, report_id=f"staged-{record_kind}")),
+        "warning": lambda: store.save_run_warnings([warning]),
+        "coverage": lambda: store.save_module_coverage([coverage]),
+    }
+    writers[record_kind]()
+
+    with pytest.raises(InvalidPublicationBundleError, match="already has normal ledger records"):
+        store.publish_run_bundle(
+            snapshots=[],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+    assert store.list_reports() == []
+
+
+def test_terminal_run_rejects_all_compatibility_ledger_appends(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-terminal-append",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    _, _, report, _, _ = _publication_material(tmp_path, run, suffix="-published")
+    store.publish_run_bundle(
+        snapshots=[],
+        facts=[],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+    snapshot, fact, extra_report, warning, coverage = _publication_material(
+        tmp_path,
+        run,
+        suffix="-late",
+    )
+
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_snapshot(snapshot)
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_facts([fact])
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_report(extra_report)
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_run_warnings([warning])
+    with pytest.raises(PublishedRecordExistsError):
+        store.save_module_coverage([coverage])
+
+    assert store.list_snapshots(run.run_id) == []
+    assert store.list_facts(run.run_id) == []
+    assert store.list_run_warnings(run.run_id) == []
+    assert store.list_module_coverage(run.run_id) == []
+    assert [item.report_id for item in store.list_reports()] == [report.report_id]
+
+
+def test_normal_report_queries_hide_orphan_and_nonterminal_records(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-not-published",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    report = Report(
+        report_id="report-not-published",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Not published",
+        sections=[],
+        markdown_path=str(tmp_path / "not-published.md"),
+        html_path=str(tmp_path / "not-published.html"),
+        fact_ledger_path=str(tmp_path / "not-published.json"),
+    )
+    orphan = replace(
+        report,
+        report_id="report-orphan",
+        run_id="run-missing",
+        title="Orphan report",
+    )
+    store.save_report(report)
+    store.save_report(orphan)
+
+    assert store.get_report(report.report_id) == report
+    assert store.get_report(orphan.report_id) == orphan
+    assert store.list_reports() == []
+    assert store.latest_report() is None
+    with pytest.raises(KeyError):
+        store.get_published_report(report.report_id)
+    with pytest.raises(KeyError):
+        store.get_published_report(orphan.report_id)
+
+
+def test_publish_bundle_rejects_tampered_snapshot_before_visibility(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-tampered-before-publish",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot_file = write_snapshot_text(tmp_path / "tampered.json", "original")
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-tampered-before-publish",
+        run_id=run.run_id,
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://tampered",
+        source_type=SourceType.DATA_API,
+        fetched_at=datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc),
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    report_files = [tmp_path / name for name in ("tampered.md", "tampered.html", "tampered-ledger.json")]
+    for report_file in report_files:
+        report_file.write_text("report", encoding="utf-8")
+    report = Report(
+        report_id="report-tampered-before-publish",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Tampered report",
+        sections=[],
+        markdown_path=str(report_files[0]),
+        html_path=str(report_files[1]),
+        fact_ledger_path=str(report_files[2]),
+    )
+    snapshot_file.path.write_text("tampered", encoding="utf-8")
+
+    with pytest.raises(InvalidPublicationBundleError, match=snapshot.snapshot_id):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_snapshots(run.run_id) == []
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
+def test_publish_bundle_rejects_cross_run_material_and_warning_status_mismatch(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-bundle-preflight",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    report_files = [tmp_path / name for name in ("preflight.md", "preflight.html", "preflight.json")]
+    for report_file in report_files:
+        report_file.write_text("report", encoding="utf-8")
+    report = Report(
+        report_id="report-bundle-preflight",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="Preflight report",
+        sections=[],
+        markdown_path=str(report_files[0]),
+        html_path=str(report_files[1]),
+        fact_ledger_path=str(report_files[2]),
+    )
+    snapshot_file = write_snapshot_text(tmp_path / "preflight-snapshot.json", "{}")
+    wrong_run_snapshot = RawSnapshot(
+        snapshot_id="snapshot-wrong-run",
+        run_id="other-run",
+        module="market_indices",
+        source_name="Fixture",
+        source_url="fixture://wrong-run",
+        source_type=SourceType.DATA_API,
+        fetched_at=datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc),
+        content_type="application/json",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="Fixture",
+    )
+    warning = RunWarning(
+        warning_id="warning-preflight",
+        run_id=run.run_id,
+        source_name="Fixture",
+        module="market_temperature",
+        message="Missing temperature",
+        detail=None,
+        created_at=datetime(2026, 7, 2, 7, 0, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="snapshot-wrong-run"):
+        store.publish_run_bundle(
+            snapshots=[wrong_run_snapshot],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+    with pytest.raises(InvalidPublicationBundleError, match="completed_with_warnings"):
+        store.publish_run_bundle(
+            snapshots=[],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+            warnings=[warning],
+        )
+
+    assert store.list_reports() == []
+    assert store.list_run_warnings(run.run_id) == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
+def test_publish_bundle_rejects_fact_derived_from_missing_bundle_fact(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-missing-derivation",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-missing-derivation",
+    )
+    inference = replace(
+        fact,
+        classification=FactClassification.INFERENCE,
+        derived_from_fact_ids=("fact-not-in-bundle",),
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="fact-not-in-bundle"):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[inference],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_facts(run.run_id) == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
+def test_publish_bundle_rejects_missing_fact_referenced_only_by_fact_line(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-missing-fact-line",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    _, _, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-missing-fact-line",
+    )
+    report = replace(
+        report,
+        sections=(
+            ReportSection(
+                section_id="market_indices",
+                title="Index performance",
+                body="Structured reference only.",
+                fact_ids=(),
+                status="ok",
+                fact_lines=(
+                    FactLine(
+                        fact_id="fact-only-in-line",
+                        classification=FactClassification.FACT,
+                        claim="Missing structured fact.",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="fact-only-in-line"):
+        store.publish_run_bundle(
+            snapshots=[],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
+def test_publish_bundle_rejects_fact_line_with_unledgered_derivation(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-mismatched-fact-line",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-mismatched-fact-line",
+    )
+    report = replace(
+        report,
+        sections=(
+            ReportSection(
+                section_id="market_indices",
+                title="Index performance",
+                body="Mismatched structured line.",
+                fact_ids=(fact.fact_id,),
+                status="ok",
+                fact_lines=(
+                    FactLine(
+                        fact_id=fact.fact_id,
+                        classification=fact.classification,
+                        claim=fact.claim,
+                        derived_from_fact_ids=("missing-fact",),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="does not match fact ledger"):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[fact],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
 
 
 def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path):
@@ -741,7 +1332,7 @@ def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path
         snapshots=[snapshot],
         facts=[],
         report=report,
-        target_status=RunStatus.COMPLETED,
+        target_status=RunStatus.COMPLETED_WITH_WARNINGS,
         warnings=[warning],
         module_coverage=[coverage],
     )
@@ -815,16 +1406,8 @@ def test_latest_report_uses_run_timestamp_when_report_dates_match(tmp_path):
         report_type=ReportType.AFTER_CLOSE,
         enabled_modules=["market_indices"],
     )
-    older_run = replace(
-        older_run,
-        created_at=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 7, 2, 8, 5, tzinfo=timezone.utc),
-    )
-    newer_run = replace(
-        newer_run,
-        created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 7, 2, 9, 5, tzinfo=timezone.utc),
-    )
+    older_run = replace(older_run, created_at=datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc))
+    newer_run = replace(newer_run, created_at=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc))
     older_report = Report(
         report_id="report-z-older",
         run_id=older_run.run_id,
@@ -834,9 +1417,9 @@ def test_latest_report_uses_run_timestamp_when_report_dates_match(tmp_path):
         sections=[
             ReportSection("market_indices", "Market indices", "Older", [], "ok"),
         ],
-        markdown_path="reports/older.md",
-        html_path="reports/older.html",
-        fact_ledger_path="reports/older.json",
+        markdown_path=str(tmp_path / "older.md"),
+        html_path=str(tmp_path / "older.html"),
+        fact_ledger_path=str(tmp_path / "older.json"),
     )
     newer_report = Report(
         report_id="report-a-newer",
@@ -847,15 +1430,32 @@ def test_latest_report_uses_run_timestamp_when_report_dates_match(tmp_path):
         sections=[
             ReportSection("market_indices", "Market indices", "Newer", [], "ok"),
         ],
-        markdown_path="reports/newer.md",
-        html_path="reports/newer.html",
-        fact_ledger_path="reports/newer.json",
+        markdown_path=str(tmp_path / "newer.md"),
+        html_path=str(tmp_path / "newer.html"),
+        fact_ledger_path=str(tmp_path / "newer.json"),
     )
 
-    store.save_run(older_run)
-    store.save_run(newer_run)
-    store.save_report(older_report)
-    store.save_report(newer_report)
+    for report in (older_report, newer_report):
+        for path in (report.markdown_path, report.html_path, report.fact_ledger_path):
+            tmp_path.joinpath(path).write_text("report artifact", encoding="utf-8")
+    for run, report in ((older_run, older_report), (newer_run, newer_report)):
+        store.create_run(run)
+        store.transition_run(run.run_id, RunStatus.RUNNING)
+        store.publish_run_bundle(
+            snapshots=[],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+    with store.connection() as connection:
+        connection.execute(
+            "update runs set completed_at = ? where run_id = ?",
+            ("2026-07-02T08:05:00+00:00", older_run.run_id),
+        )
+        connection.execute(
+            "update runs set completed_at = ? where run_id = ?",
+            ("2026-07-02T09:05:00+00:00", newer_run.run_id),
+        )
 
     reports = store.list_reports()
 

@@ -62,6 +62,19 @@ def validate_report_sections(
     errors: list[str] = []
 
     for section in sections:
+        for fact_line in section.fact_lines:
+            fact = fact_by_id.get(fact_line.fact_id)
+            if fact is None:
+                continue
+            if (
+                fact_line.classification != fact.classification
+                or fact_line.claim != fact.claim
+                or fact_line.derived_from_fact_ids != fact.derived_from_fact_ids
+            ):
+                errors.append(
+                    f"section {section.section_id} fact line {fact_line.fact_id} "
+                    "does not match fact ledger"
+                )
         for fact_id in _section_fact_ids(section):
             if fact_id not in fact_ids:
                 errors.append(f"section {section.section_id} cites missing fact_id {fact_id}")
