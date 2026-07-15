@@ -49,6 +49,11 @@ def run_fixture_pipeline(
     config: AppConfig,
     store: BriefingStore,
 ) -> PipelineResult:
+    run_directory(
+        config.effective_staging_dir,
+        request.report_date,
+        request.run_id,
+    )
     enabled_modules = config.enabled_modules(request.report_type)
     run = Run.create(
         run_id=request.run_id,
