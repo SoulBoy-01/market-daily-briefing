@@ -169,7 +169,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     @app.get("/reports/{report_id}")
     def report_detail(request: Request, report_id: str):
         try:
-            report = briefing_store.get_report(report_id)
+            report = briefing_store.get_published_report(report_id)
             briefing_store.assert_report_integrity(report_id)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
@@ -207,9 +207,15 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         tags: Annotated[list[str] | None, Form()] = None,
     ):
         try:
-            report = briefing_store.get_report(report_id)
+            report = briefing_store.get_published_report(report_id)
+            briefing_store.assert_report_integrity(report_id)
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+        except AuditIntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="审计完整性校验失败",
+            ) from exc
 
         section_ids = {section.section_id for section in report.sections}
         if section_id not in section_ids:

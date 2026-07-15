@@ -118,6 +118,42 @@ def test_validation_rejects_missing_fact_id_cited_only_in_fact_lines():
     assert result.errors == ["section market_indices cites missing fact_id fact-999"]
 
 
+def test_validation_rejects_fact_line_that_disagrees_with_fact_ledger():
+    facts = [
+        _fact(
+            "fact-001",
+            "上证指数收涨。",
+            FactClassification.INFERENCE,
+            derived_from_fact_ids=("fact-source",),
+        ),
+        _fact("fact-source", "上证指数收盘数据。"),
+    ]
+    sections = [
+        ReportSection(
+            "market_indices",
+            "指数表现",
+            "结构化事实行不得改写账本。",
+            ["fact-001"],
+            "ok",
+            fact_lines=[
+                FactLine(
+                    fact_id="fact-001",
+                    classification=FactClassification.FACT,
+                    claim="上证指数大涨。",
+                    derived_from_fact_ids=(),
+                )
+            ],
+        )
+    ]
+
+    result = validate_report_sections(sections, facts)
+
+    assert result.ok is False
+    assert result.errors == [
+        "section market_indices fact line fact-001 does not match fact ledger"
+    ]
+
+
 def test_validation_rejects_banned_investment_advice_language():
     facts = [_fact("fact-001", "上证指数收涨。")]
     sections = [

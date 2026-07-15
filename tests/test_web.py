@@ -1,9 +1,11 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from market_briefing.app import create_app, default_config_path
+from market_briefing.audit import write_snapshot_text
 from market_briefing.config import AppConfig
 from market_briefing.domain import (
     AtomicFact,
@@ -11,9 +13,12 @@ from market_briefing.domain import (
     FactLine,
     ModuleCoverage,
     ModuleCoverageStatus,
+    RawSnapshot,
     Report,
     ReportSection,
     ReportType,
+    Run,
+    RunStatus,
     RunWarning,
     SourceType,
 )
@@ -68,6 +73,79 @@ def _run_fixture(client):
         },
         follow_redirects=False,
     )
+
+
+def _publish_report(
+    store,
+    tmp_path,
+    report,
+    *,
+    facts=(),
+    warnings=(),
+    module_coverage=(),
+):
+    report_dir = tmp_path / "published" / report.report_id
+    report_dir.mkdir(parents=True)
+    markdown_path = report_dir / "briefing.md"
+    html_path = report_dir / "briefing.html"
+    fact_ledger_path = report_dir / "fact_ledger.json"
+    for path in (markdown_path, html_path, fact_ledger_path):
+        path.write_text("published test artifact", encoding="utf-8")
+    published_report = replace(
+        report,
+        markdown_path=str(markdown_path),
+        html_path=str(html_path),
+        fact_ledger_path=str(fact_ledger_path),
+    )
+    snapshots = []
+    published_facts = []
+    for index, fact in enumerate(facts):
+        snapshot_file = write_snapshot_text(
+            report_dir / f"snapshot-{index}.json",
+            "{}",
+        )
+        snapshot_id = f"snapshot-{fact.fact_id}"
+        snapshots.append(
+            RawSnapshot(
+                snapshot_id=snapshot_id,
+                run_id=report.run_id,
+                module=fact.module,
+                source_name=fact.source_name,
+                source_url=fact.source_url,
+                source_type=fact.source_type,
+                fetched_at=fact.fetched_at,
+                content_type="application/json",
+                raw_path=str(snapshot_file.path),
+                content_sha256=snapshot_file.content_sha256,
+                provider_name=fact.source_name,
+            )
+        )
+        published_facts.append(
+            replace(
+                fact,
+                raw_snapshot_path=str(snapshot_file.path),
+                source_snapshot_id=snapshot_id,
+            )
+        )
+    run = Run.create(
+        run_id=report.run_id,
+        report_date=report.report_date,
+        report_type=report.report_type,
+        enabled_modules=sorted({fact.module for fact in facts}),
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    store.publish_run_bundle(
+        snapshots=snapshots,
+        facts=published_facts,
+        report=published_report,
+        target_status=(
+            RunStatus.COMPLETED_WITH_WARNINGS if warnings else RunStatus.COMPLETED
+        ),
+        warnings=list(warnings),
+        module_coverage=list(module_coverage),
+    )
+    return published_report
 
 
 def test_dashboard_renders_loop_first_sections(tmp_path):
@@ -138,26 +216,31 @@ def test_dashboard_can_trigger_fixture_run_and_show_report(tmp_path):
 
 def test_report_and_dashboard_show_coverage_and_safe_warning_summaries(tmp_path):
     store, client = _store_and_client(tmp_path)
-    run_response = _run_fixture(client)
     created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
-    store.save_run_warnings(
-        [
-            RunWarning(
-                warning_id="warning-web-policy",
-                run_id="web-after-close-001",
-                source_name="示例交易所",
-                module="policy_regulation",
-                message="详情页检查失败",
-                detail="Traceback: secret parser diagnostics",
-                created_at=created_at,
-            )
-        ]
+    report = Report(
+        report_id="report-web-observability",
+        run_id="web-observability",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="A股盘后简报 2026-07-02",
+        sections=[],
+        markdown_path="unused.md",
+        html_path="unused.html",
+        fact_ledger_path="unused.json",
     )
-    store.save_module_coverage(
-        [
+    warning = RunWarning(
+        warning_id="warning-web-policy",
+        run_id=report.run_id,
+        source_name="示例交易所",
+        module="policy_regulation",
+        message="详情页检查失败",
+        detail="Traceback: secret parser diagnostics",
+        created_at=created_at,
+    )
+    coverage = [
             ModuleCoverage(
                 coverage_id="coverage-web-market",
-                run_id="web-after-close-001",
+                run_id=report.run_id,
                 module="market_indices",
                 status=ModuleCoverageStatus.COVERED,
                 source_name="样例市场数据",
@@ -166,17 +249,23 @@ def test_report_and_dashboard_show_coverage_and_safe_warning_summaries(tmp_path)
             ),
             ModuleCoverage(
                 coverage_id="coverage-web-policy",
-                run_id="web-after-close-001",
+                run_id=report.run_id,
                 module="policy_regulation",
                 status=ModuleCoverageStatus.FAILED,
                 source_name="示例交易所",
                 message="官方详情页未完成覆盖。",
                 recorded_at=created_at,
-            ),
-        ]
+            )
+    ]
+    published_report = _publish_report(
+        store,
+        tmp_path,
+        report,
+        warnings=[warning],
+        module_coverage=coverage,
     )
 
-    report_response = client.get(run_response.headers["location"])
+    report_response = client.get(f"/reports/{published_report.report_id}")
     dashboard_response = client.get("/")
 
     for response in (report_response, dashboard_response):
@@ -216,6 +305,26 @@ def test_dashboard_blocks_preview_when_published_snapshot_is_tampered(tmp_path):
     assert "审计完整性校验失败" in response.text
 
 
+def test_feedback_blocks_when_published_snapshot_is_tampered(tmp_path):
+    store, client = _store_and_client(tmp_path, raise_server_exceptions=False)
+    run_response = _run_fixture(client)
+    snapshot = store.list_snapshots("web-after-close-001")[0]
+    Path(snapshot.raw_path).write_text("tampered", encoding="utf-8")
+
+    response = client.post(
+        run_response.headers["location"] + "/feedback",
+        data={
+            "section_id": "one_sentence_conclusion",
+            "score": "6",
+            "note": "不应绕过审计损坏阻断。",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "审计完整性校验失败" in response.text
+    assert store.list_feedback("report-web-after-close-001") == []
+
+
 def test_dashboard_rejects_duplicate_run_with_chinese_conflict(tmp_path):
     client = _client(tmp_path, raise_server_exceptions=False)
 
@@ -227,9 +336,47 @@ def test_dashboard_rejects_duplicate_run_with_chinese_conflict(tmp_path):
     assert "运行 ID 已存在，请使用新的运行 ID" in duplicate_response.text
 
 
+def test_web_hides_report_that_did_not_complete_publication_transaction(tmp_path):
+    store, client = _store_and_client(tmp_path, raise_server_exceptions=False)
+    run = Run.create(
+        run_id="web-running-report",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    report = Report(
+        report_id="report-web-running",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="不应可见的报告",
+        sections=[],
+        markdown_path=str(tmp_path / "running.md"),
+        html_path=str(tmp_path / "running.html"),
+        fact_ledger_path=str(tmp_path / "running.json"),
+    )
+    store.save_report(report)
+
+    dashboard_response = client.get("/")
+    detail_response = client.get(f"/reports/{report.report_id}")
+    feedback_response = client.post(
+        f"/reports/{report.report_id}/feedback",
+        data={"section_id": "none", "score": "4"},
+    )
+
+    assert dashboard_response.status_code == 200
+    assert report.title not in dashboard_response.text
+    assert detail_response.status_code == 404
+    assert feedback_response.status_code == 404
+
+
 def test_dashboard_shows_after_close_sections_as_review_material(tmp_path):
     store, client = _store_and_client(tmp_path)
-    store.save_report(
+    _publish_report(
+        store,
+        tmp_path,
         Report(
             report_id="report-thin-pre-open",
             run_id="thin-pre-open",
@@ -248,9 +395,11 @@ def test_dashboard_shows_after_close_sections_as_review_material(tmp_path):
             markdown_path="reports/pre.md",
             html_path="reports/pre.html",
             fact_ledger_path="reports/pre.json",
-        )
+        ),
     )
-    store.save_report(
+    _publish_report(
+        store,
+        tmp_path,
         Report(
             report_id="report-review-after-close",
             run_id="review-after-close",
@@ -269,7 +418,7 @@ def test_dashboard_shows_after_close_sections_as_review_material(tmp_path):
             markdown_path="reports/after.md",
             html_path="reports/after.html",
             fact_ledger_path="reports/after.json",
-        )
+        ),
     )
 
     response = client.get("/")
@@ -436,38 +585,57 @@ def test_dashboard_rejects_feedback_for_unknown_section(tmp_path):
 
 def test_report_feedback_validation_errors_rerender_with_chinese_messages_and_values(tmp_path):
     store, client = _store_and_client(tmp_path)
-    run_response = _run_fixture(client)
     note = "这段备注应当被保留。"
     created_at = datetime(2026, 7, 2, 8, 30, tzinfo=timezone.utc)
-    store.save_run_warnings(
-        [
-            RunWarning(
-                warning_id="warning-feedback-rerender",
-                run_id="web-after-close-001",
-                source_name="示例交易所",
-                module="policy_regulation",
-                message="反馈回填时也应保留",
-                detail="Traceback: hidden detail",
-                created_at=created_at,
+    report = Report(
+        report_id="report-feedback-rerender",
+        run_id="run-feedback-rerender",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        title="A股盘后简报 2026-07-02",
+        sections=[
+            ReportSection(
+                section_id="next_watchlist",
+                title="下一轮观察清单",
+                body="- 待验证：后续观察事项。",
+                fact_ids=[],
+                status="ok",
             )
-        ]
+        ],
+        markdown_path="unused.md",
+        html_path="unused.html",
+        fact_ledger_path="unused.json",
     )
-    store.save_module_coverage(
-        [
+    warning = RunWarning(
+        warning_id="warning-feedback-rerender",
+        run_id=report.run_id,
+        source_name="示例交易所",
+        module="policy_regulation",
+        message="反馈回填时也应保留",
+        detail="Traceback: hidden detail",
+        created_at=created_at,
+    )
+    coverage = [
             ModuleCoverage(
                 coverage_id="coverage-feedback-rerender",
-                run_id="web-after-close-001",
+                run_id=report.run_id,
                 module="policy_regulation",
                 status=ModuleCoverageStatus.FAILED,
                 source_name="示例交易所",
                 message="反馈回填时覆盖状态也应保留。",
                 recorded_at=created_at,
             )
-        ]
+    ]
+    published_report = _publish_report(
+        store,
+        tmp_path,
+        report,
+        warnings=[warning],
+        module_coverage=coverage,
     )
 
     feedback_response = client.post(
-        run_response.headers["location"] + "/feedback",
+        f"/reports/{published_report.report_id}/feedback",
         data={
             "section_id": "next_watchlist",
             "score": "6",
@@ -486,7 +654,7 @@ def test_report_feedback_validation_errors_rerender_with_chinese_messages_and_va
     assert "示例交易所 / 政策/监管 / 反馈回填时也应保留" in feedback_response.text
     assert "检查失败" in feedback_response.text
     assert "Traceback" not in feedback_response.text
-    assert store.list_feedback("report-web-after-close-001") == []
+    assert store.list_feedback(published_report.report_id) == []
 
 
 def test_report_feedback_note_too_long_rerenders_with_original_note(tmp_path):
@@ -572,8 +740,7 @@ def test_report_and_dashboard_render_structured_fact_lines(tmp_path):
         html_path="reports/structured.html",
         fact_ledger_path="reports/structured.json",
     )
-    store.save_facts([fact])
-    store.save_report(report)
+    _publish_report(store, tmp_path, report, facts=[fact])
 
     report_response = client.get("/reports/report-structured")
     dashboard_response = client.get("/")
@@ -610,7 +777,7 @@ def test_report_omits_fact_chip_row_when_section_has_no_fact_ids(tmp_path):
         html_path="reports/empty.html",
         fact_ledger_path="reports/empty.json",
     )
-    store.save_report(report)
+    _publish_report(store, tmp_path, report)
 
     response = client.get("/reports/report-empty-fact-chips")
 
@@ -660,8 +827,7 @@ def test_report_blocks_unsafe_source_url_links(tmp_path):
         html_path="reports/unsafe.html",
         fact_ledger_path="reports/unsafe.json",
     )
-    store.save_facts([fact])
-    store.save_report(report)
+    _publish_report(store, tmp_path, report, facts=[fact])
     client = TestClient(create_app(config=config, store=store))
 
     response = client.get("/reports/report-unsafe-url")
