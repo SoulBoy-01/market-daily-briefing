@@ -66,7 +66,7 @@ def run_fixture_pipeline(
         raw_dir=config.raw_dir,
         reports_dir=config.reports_dir,
         diagnostics_dir=config.effective_diagnostics_dir,
-        published_run_ids=store.published_run_ids(),
+        published_run_locations=store.published_run_locations(),
     )
     store.transition_run(run.run_id, RunStatus.RUNNING)
 
@@ -233,7 +233,7 @@ def _recover_failed_publication(
         raw_dir=config.raw_dir,
         reports_dir=config.reports_dir,
         diagnostics_dir=config.effective_diagnostics_dir,
-        published_run_ids=store.published_run_ids(),
+        published_run_locations=store.published_run_locations(),
     )
     diagnostics_run_dir = run_directory(
         config.effective_diagnostics_dir,

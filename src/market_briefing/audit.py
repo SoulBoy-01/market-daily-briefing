@@ -79,9 +79,13 @@ def recover_orphaned_publication_directories(
     raw_dir: Path,
     reports_dir: Path,
     diagnostics_dir: Path,
-    published_run_ids: set[str],
+    published_run_locations: set[tuple[str, str, str]],
 ) -> set[str]:
     recovered: set[str] = set()
+    published_raw_locations = {
+        (report_date, run_id)
+        for report_date, _, run_id in published_run_locations
+    }
     if raw_dir.exists():
         for date_dir in _child_directories(raw_dir):
             for run_dir in _child_directories(date_dir):
@@ -89,7 +93,7 @@ def recover_orphaned_publication_directories(
                 expected = run_directory(raw_dir, date_dir.name, run_id)
                 if run_dir.resolve() != expected:
                     raise UnsafeAuditPathError(f"unexpected raw run path: {run_dir}")
-                if run_id not in published_run_ids:
+                if (date_dir.name, run_id) not in published_raw_locations:
                     _move_orphan(
                         run_dir,
                         run_directory(diagnostics_dir, date_dir.name, run_id) / "orphan-raw",
@@ -114,7 +118,11 @@ def recover_orphaned_publication_directories(
                         reports_dir.resolve()
                     ):
                         raise UnsafeAuditPathError(f"unexpected report run path: {run_dir}")
-                    if run_id not in published_run_ids:
+                    if (
+                        date_dir.name,
+                        report_type_dir.name,
+                        run_id,
+                    ) not in published_run_locations:
                         _move_orphan(
                             run_dir,
                             run_directory(diagnostics_dir, date_dir.name, run_id)

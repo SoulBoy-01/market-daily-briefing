@@ -54,7 +54,7 @@ def test_recovery_moves_unreferenced_final_directories_to_diagnostics(tmp_path):
         raw_dir=raw_dir,
         reports_dir=reports_dir,
         diagnostics_dir=diagnostics_dir,
-        published_run_ids=set(),
+        published_run_locations=set(),
     )
 
     assert recovered == {"orphan-run"}
@@ -82,9 +82,47 @@ def test_recovery_preserves_directories_referenced_by_published_run(tmp_path):
         raw_dir=tmp_path / "raw",
         reports_dir=tmp_path / "reports",
         diagnostics_dir=tmp_path / "diagnostics",
-        published_run_ids={"published-run"},
+        published_run_locations={
+            ("2026-07-02", "after_close", "published-run"),
+        },
     )
 
     assert recovered == set()
     assert raw_run.is_dir()
     assert report_run.is_dir()
+
+
+def test_recovery_moves_published_run_id_from_unreferenced_locations(tmp_path):
+    raw_dir = tmp_path / "raw"
+    reports_dir = tmp_path / "reports"
+    diagnostics_dir = tmp_path / "diagnostics"
+    correct_raw = raw_dir / "2026-07-02" / "published-run"
+    misplaced_raw = raw_dir / "2026-07-03" / "published-run"
+    correct_report = reports_dir / "2026-07-02" / "after_close" / "published-run"
+    misplaced_report = reports_dir / "2026-07-02" / "pre_open_update" / "published-run"
+    for directory in (correct_raw, misplaced_raw, correct_report, misplaced_report):
+        directory.mkdir(parents=True)
+
+    recovered = recover_orphaned_publication_directories(
+        raw_dir=raw_dir,
+        reports_dir=reports_dir,
+        diagnostics_dir=diagnostics_dir,
+        published_run_locations={
+            ("2026-07-02", "after_close", "published-run"),
+        },
+    )
+
+    assert recovered == {"published-run"}
+    assert correct_raw.is_dir()
+    assert correct_report.is_dir()
+    assert not misplaced_raw.exists()
+    assert not misplaced_report.exists()
+    assert (
+        diagnostics_dir / "2026-07-03" / "published-run" / "orphan-raw"
+    ).is_dir()
+    assert (
+        diagnostics_dir
+        / "2026-07-02"
+        / "published-run"
+        / "orphan-report-pre_open_update"
+    ).is_dir()
