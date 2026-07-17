@@ -411,6 +411,7 @@ class BriefingStore:
         record = candidate.to_record()
         try:
             with self.connection() as connection:
+                self._assert_run_accepts_ledger_append(connection, candidate.run_id)
                 connection.execute(
                     """
                     insert into evidence_candidates (
@@ -904,6 +905,10 @@ class BriefingStore:
                     snapshots=snapshots,
                     run_id=report.run_id,
                 )
+                self._validate_candidate_review_resolution(
+                    connection,
+                    run_id=report.run_id,
+                )
 
                 self._insert_snapshots(connection, snapshots)
                 self._insert_facts(connection, facts)
@@ -1040,6 +1045,34 @@ class BriefingStore:
                     f"candidate {fact.source_candidate_id} does not approve fact "
                     f"{fact.fact_id}"
                 )
+
+    @staticmethod
+    def _validate_candidate_review_resolution(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+    ) -> None:
+        unresolved = connection.execute(
+            """
+            select candidates.candidate_id
+            from evidence_candidates as candidates
+            where candidates.run_id = ?
+              and (
+                select events.to_status
+                from candidate_review_events as events
+                where events.candidate_id = candidates.candidate_id
+                order by events.event_id desc
+                limit 1
+              ) = ?
+            order by candidates.candidate_id
+            limit 1
+            """,
+            (run_id, CandidateReviewStatus.PENDING.value),
+        ).fetchone()
+        if unresolved is not None:
+            raise InvalidPublicationBundleError(
+                f"candidate {unresolved['candidate_id']} is not resolved"
+            )
 
     def _validate_publication_bundle(
         self,
