@@ -1221,6 +1221,7 @@ class BriefingStore:
             if not Path(path).is_file():
                 raise AuditIntegrityError(f"missing {label} file for {report.report_id}: {path}")
         snapshots = self.list_snapshots(report.run_id)
+        facts = self.list_facts(report.run_id)
         snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
         snapshot_by_path = {str(Path(snapshot.raw_path).resolve()): snapshot for snapshot in snapshots}
         for snapshot in snapshots:
@@ -1228,7 +1229,7 @@ class BriefingStore:
                 raise AuditIntegrityError(
                     f"snapshot integrity check failed for {snapshot.snapshot_id}"
                 )
-        for fact in self.list_facts(report.run_id):
+        for fact in facts:
             snapshot = snapshot_by_path.get(str(Path(fact.raw_snapshot_path).resolve()))
             if snapshot is None:
                 raise AuditIntegrityError(
@@ -1241,6 +1242,20 @@ class BriefingStore:
                     raise AuditIntegrityError(
                         f"fact {fact.fact_id} source snapshot does not match its raw path"
                     )
+        try:
+            with self.connection() as connection:
+                self._validate_candidate_audit_links(
+                    connection,
+                    facts=facts,
+                    snapshots=snapshots,
+                    run_id=report.run_id,
+                )
+                self._validate_candidate_review_resolution(
+                    connection,
+                    run_id=report.run_id,
+                )
+        except InvalidPublicationBundleError as exc:
+            raise AuditIntegrityError(str(exc)) from exc
 
     def get_report(self, report_id: str) -> Report:
         with self.connection() as connection:

@@ -1538,6 +1538,67 @@ def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path
         store.assert_report_integrity(report.report_id)
 
 
+def test_audit_integrity_rejects_tampered_candidate_approval_link(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-candidate-integrity",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-candidate-integrity",
+    )
+    candidate = replace(
+        _candidate("candidate-integrity"),
+        run_id=run.run_id,
+        module=snapshot.module,
+        snapshot_id=snapshot.snapshot_id,
+    )
+    store.save_candidate(candidate)
+    store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.APPROVED,
+        reviewer_id="local-maintainer",
+        note="已核对详情页。",
+        approved_fact_id=fact.fact_id,
+    )
+    linked_fact = replace(
+        fact,
+        source_candidate_id=candidate.candidate_id,
+        source_snapshot_id=snapshot.snapshot_id,
+    )
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[linked_fact],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+    store.assert_report_integrity(report.report_id)
+
+    with store.connection() as connection:
+        connection.execute(
+            """
+            update candidate_review_events
+            set approved_fact_id = ?
+            where candidate_id = ? and to_status = ?
+            """,
+            (
+                "fact-tampered",
+                candidate.candidate_id,
+                CandidateReviewStatus.APPROVED.value,
+            ),
+        )
+
+    with pytest.raises(AuditIntegrityError, match=candidate.candidate_id):
+        store.assert_report_integrity(report.report_id)
+
+
 def test_get_report_loads_legacy_sections_without_fact_lines(tmp_path):
     store = BriefingStore(tmp_path / "briefing.sqlite")
     store.initialize()
