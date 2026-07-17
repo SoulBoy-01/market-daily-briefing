@@ -313,6 +313,49 @@ def test_initialize_upgrades_legacy_snapshot_columns(tmp_path):
     assert snapshot.license_ref is None
 
 
+def test_initialize_backfills_hash_for_existing_legacy_snapshot(tmp_path):
+    database_path = tmp_path / "legacy-existing-snapshot.sqlite"
+    snapshot_file = write_snapshot_text(tmp_path / "legacy-existing.json", '{"legacy": true}')
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            create table source_snapshots (
+                snapshot_id text primary key,
+                run_id text not null,
+                module text not null,
+                source_name text not null,
+                source_url text not null,
+                source_type text not null,
+                fetched_at text not null,
+                content_type text not null,
+                raw_path text not null,
+                metadata text not null
+            )
+            """
+        )
+        connection.execute(
+            "insert into source_snapshots values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-existing-snapshot",
+                "legacy-run",
+                "market_indices",
+                "Legacy Provider",
+                "fixture://legacy-existing",
+                "data_api",
+                "2026-07-01T07:00:00+00:00",
+                "application/json",
+                str(snapshot_file.path),
+                "{}",
+            ),
+        )
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    snapshot = store.list_snapshots("legacy-run")[0]
+    assert snapshot.content_sha256 == snapshot_file.content_sha256
+
+
 def test_initialize_upgrades_legacy_facts_with_candidate_audit_links(tmp_path):
     database_path = tmp_path / "legacy-facts.sqlite"
     store = BriefingStore(database_path)
