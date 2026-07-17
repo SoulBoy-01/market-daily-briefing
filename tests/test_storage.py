@@ -1173,6 +1173,78 @@ def test_publish_bundle_rejects_fact_derived_from_missing_bundle_fact(tmp_path):
     assert store.get_run(run.run_id).status == RunStatus.RUNNING
 
 
+@pytest.mark.parametrize(
+    ("candidate_setup", "expected_error"),
+    [
+        ("missing", "candidate-missing"),
+        ("pending", "is not approved"),
+        ("wrong_fact", "does not approve fact"),
+        ("wrong_snapshot", "does not match snapshot"),
+    ],
+)
+def test_publish_bundle_rejects_invalid_candidate_audit_links(
+    tmp_path,
+    candidate_setup,
+    expected_error,
+):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-candidate-link",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-candidate-link",
+    )
+    candidate_id = "candidate-missing"
+
+    if candidate_setup != "missing":
+        candidate_id = f"candidate-{candidate_setup}"
+        candidate = replace(
+            _candidate(candidate_id),
+            run_id=run.run_id,
+            snapshot_id=(
+                "snapshot-other" if candidate_setup == "wrong_snapshot" else snapshot.snapshot_id
+            ),
+        )
+        store.save_candidate(candidate)
+        if candidate_setup != "pending":
+            store.review_candidate(
+                candidate.candidate_id,
+                CandidateReviewStatus.APPROVED,
+                reviewer_id="local-maintainer",
+                note="已核对详情页。",
+                approved_fact_id=(
+                    "fact-other" if candidate_setup == "wrong_fact" else fact.fact_id
+                ),
+            )
+
+    linked_fact = replace(
+        fact,
+        module="policy_regulation",
+        source_candidate_id=candidate_id,
+        source_snapshot_id=snapshot.snapshot_id,
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match=expected_error):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[linked_fact],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_facts(run.run_id) == []
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
 def test_publish_bundle_rejects_missing_fact_referenced_only_by_fact_line(tmp_path):
     store = BriefingStore(tmp_path / "briefing.sqlite")
     store.initialize()
