@@ -273,6 +273,34 @@ def test_fixture_pipeline_rejects_unsafe_run_path_before_creating_run(
     assert store.get_run(run_id) is None
 
 
+def test_fixture_pipeline_recovers_orphans_before_creating_run(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    store.initialize()
+
+    def fail_recovery(**kwargs):
+        raise RuntimeError("injected recovery failure")
+
+    monkeypatch.setattr(
+        "market_briefing.pipeline.recover_orphaned_publication_directories",
+        fail_recovery,
+    )
+
+    with pytest.raises(RuntimeError, match="injected recovery failure"):
+        run_fixture_pipeline(
+            PipelineRequest(
+                run_id="run-recovery-failure",
+                report_date="2026-07-02",
+                report_type=ReportType.AFTER_CLOSE,
+                fixture_path=Path("tests/fixtures/after_close_sources.json"),
+            ),
+            config=config,
+            store=store,
+        )
+
+    assert store.get_run("run-recovery-failure") is None
+
+
 def test_fixture_pipeline_carries_previous_feedback_into_next_report(tmp_path):
     config = _config(tmp_path)
     store = BriefingStore(config.database_path)

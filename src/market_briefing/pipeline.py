@@ -61,13 +61,13 @@ def run_fixture_pipeline(
         report_type=request.report_type,
         enabled_modules=enabled_modules,
     )
-    store.create_run(run)
     recover_orphaned_publication_directories(
         raw_dir=config.raw_dir,
         reports_dir=config.reports_dir,
         diagnostics_dir=config.effective_diagnostics_dir,
         published_run_locations=store.published_run_locations(),
     )
+    store.create_run(run)
     store.transition_run(run.run_id, RunStatus.RUNNING)
 
     try:
