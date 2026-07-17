@@ -1158,10 +1158,13 @@ class BriefingStore:
                 )
 
     def published_run_ids(self) -> set[str]:
+        return {run_id for _, _, run_id in self.published_run_locations()}
+
+    def published_run_locations(self) -> set[tuple[str, str, str]]:
         with self.connection() as connection:
             rows = connection.execute(
                 """
-                select distinct reports.run_id
+                select distinct reports.report_date, reports.report_type, reports.run_id
                 from reports
                 join runs on runs.run_id = reports.run_id
                 where reports.published_at is not null
@@ -1169,7 +1172,10 @@ class BriefingStore:
                 """,
                 (RunStatus.COMPLETED.value, RunStatus.COMPLETED_WITH_WARNINGS.value),
             ).fetchall()
-        return {row["run_id"] for row in rows}
+        return {
+            (row["report_date"], row["report_type"], row["run_id"])
+            for row in rows
+        }
 
     def assert_report_integrity(self, report_id: str) -> None:
         report = self.get_published_report(report_id)

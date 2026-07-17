@@ -54,7 +54,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         raw_dir=app_config.raw_dir,
         reports_dir=app_config.reports_dir,
         diagnostics_dir=app_config.effective_diagnostics_dir,
-        published_run_ids=briefing_store.published_run_ids(),
+        published_run_locations=briefing_store.published_run_locations(),
     )
 
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
