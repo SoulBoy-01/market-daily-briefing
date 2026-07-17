@@ -43,6 +43,15 @@ class ReconciliationResult:
 
 
 def reconcile_core_indices(records: list[MarketIndexRecord]) -> ReconciliationResult:
+    if any(
+        not record.close.is_finite() or not record.change_pct.is_finite()
+        for record in records
+    ):
+        return _failed_result(
+            "core_index_source_invalid_value",
+            "核心指数来源包含非有限数值",
+        )
+
     provider_ids = tuple(sorted({record.provider_id for record in records}))
     if len(provider_ids) != 2:
         return _failed_result(
