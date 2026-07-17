@@ -6,6 +6,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,17 @@ class BriefingStore:
             connection.execute(
                 "alter table source_snapshots add column content_sha256 text not null default ''"
             )
+            legacy_snapshots = connection.execute(
+                "select snapshot_id, raw_path from source_snapshots"
+            ).fetchall()
+            for snapshot in legacy_snapshots:
+                raw_path = Path(snapshot["raw_path"])
+                if not raw_path.is_file():
+                    continue
+                connection.execute(
+                    "update source_snapshots set content_sha256 = ? where snapshot_id = ?",
+                    (sha256(raw_path.read_bytes()).hexdigest(), snapshot["snapshot_id"]),
+                )
         if "provider_name" not in snapshot_columns:
             connection.execute(
                 "alter table source_snapshots add column provider_name text not null default ''"
