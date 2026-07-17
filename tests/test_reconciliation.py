@@ -128,6 +128,29 @@ def test_conflict_returns_diagnostics_without_selecting_or_averaging_value():
     )
 
 
+def test_non_finite_source_values_return_structured_blocking_error():
+    for field in ("close", "change_pct"):
+        for value in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
+            records = [
+                (
+                    replace(record, **{field: value})
+                    if record.provider_id == "provider-b"
+                    and record.symbol == "000001.SH"
+                    else record
+                )
+                for record in _records()
+            ]
+
+            result = reconcile_core_indices(records)
+
+            assert result.passed is False
+            assert [error.code for error in result.blocking_errors] == [
+                "core_index_source_invalid_value"
+            ]
+            assert result.reconciled_indices == ()
+            assert result.diagnostics == ()
+
+
 def test_all_ten_golden_cases_match_combined_gate_and_reconciliation_contracts():
     for case in load_golden_cases(Path("tests/golden/cases")):
         records = [MarketIndexRecord(**item.model_dump()) for item in case.inputs.core_indices]
