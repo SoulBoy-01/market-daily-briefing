@@ -65,6 +65,14 @@
           <dd>{{ latest_report.run_id }}</dd>
         </div>
         <div>
+          <dt>运行状态</dt>
+          <dd>{{ latest_run.status|status_label }}</dd>
+        </div>
+        <div>
+          <dt>发布状态</dt>
+          <dd>正式发布</dd>
+        </div>
+        <div>
           <dt>章节数</dt>
           <dd>{{ latest_report.sections|length }}</dd>
         </div>

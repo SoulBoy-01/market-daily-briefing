@@ -9,6 +9,8 @@ from market_briefing.audit import write_snapshot_text
 from market_briefing.config import AppConfig
 from market_briefing.domain import (
     AtomicFact,
+    CandidateReviewStatus,
+    EvidenceCandidate,
     FactClassification,
     FactLine,
     ModuleCoverage,
@@ -212,6 +214,134 @@ def test_dashboard_can_trigger_fixture_run_and_show_report(tmp_path):
     assert "保存反馈" in report_response.text
     assert "2026-07-02" in report_response.text
     assert "fact-market-001" in report_response.text
+
+
+def test_report_and_dashboard_show_publication_and_audit_metadata(tmp_path):
+    store, client = _store_and_client(tmp_path)
+    run_response = _run_fixture(client)
+    report_response = client.get(run_response.headers["location"])
+    dashboard_response = client.get("/")
+    snapshot = store.list_snapshots("web-after-close-001")[0]
+
+    for response in (report_response, dashboard_response):
+        assert response.status_code == 200
+        assert "运行状态" in response.text
+        assert "已完成" in response.text
+        assert "发布状态" in response.text
+        assert "正式发布" in response.text
+
+    assert "运行事件" in report_response.text
+    assert "已创建" in report_response.text
+    assert "运行中" in report_response.text
+    assert "SHA-256" in report_response.text
+    assert snapshot.content_sha256 in report_response.text
+    assert snapshot.provider_name in report_response.text
+    assert snapshot.license_ref in report_response.text
+
+
+def test_report_shows_candidate_review_audit_chain(tmp_path):
+    store, client = _store_and_client(tmp_path)
+    fetched_at = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
+    run = Run.create(
+        run_id="web-candidate-audit",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    report_dir = tmp_path / "candidate-audit"
+    report_dir.mkdir()
+    snapshot_file = write_snapshot_text(report_dir / "official.html", "official fixture")
+    snapshot = RawSnapshot(
+        snapshot_id="snapshot-web-candidate-audit",
+        run_id=run.run_id,
+        module="policy_regulation",
+        source_name="示例交易所",
+        source_url="fixture://candidate-audit",
+        source_type=SourceType.EXCHANGE,
+        fetched_at=fetched_at,
+        content_type="text/html",
+        raw_path=str(snapshot_file.path),
+        content_sha256=snapshot_file.content_sha256,
+        provider_name="示例交易所",
+        license_ref="fixture:candidate-audit",
+    )
+    candidate = EvidenceCandidate(
+        candidate_id="candidate-web-audit",
+        run_id=run.run_id,
+        snapshot_id=snapshot.snapshot_id,
+        module=snapshot.module,
+        title="交易所发布规则说明",
+        detail_url="fixture://candidate-audit",
+        published_at=fetched_at,
+        excerpt="交易所发布规则说明。",
+        suggested_classification=FactClassification.FACT,
+        created_at=fetched_at,
+    )
+    store.save_candidate(candidate)
+    store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.APPROVED,
+        reviewer_id="local-maintainer",
+        note="已核对本地详情页。",
+        approved_fact_id="fact-web-candidate-audit",
+        reviewed_at=fetched_at,
+    )
+    fact = AtomicFact(
+        fact_id="fact-web-candidate-audit",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        module=snapshot.module,
+        claim=candidate.excerpt,
+        classification=FactClassification.FACT,
+        source_name=snapshot.source_name,
+        source_url=candidate.detail_url,
+        source_type=snapshot.source_type,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path=snapshot.raw_path,
+        source_candidate_id=candidate.candidate_id,
+        source_snapshot_id=snapshot.snapshot_id,
+    )
+    paths = [
+        report_dir / "briefing.md",
+        report_dir / "briefing.html",
+        report_dir / "fact_ledger.json",
+    ]
+    for path in paths:
+        path.write_text("candidate audit artifact", encoding="utf-8")
+    report = Report(
+        report_id="report-web-candidate-audit",
+        run_id=run.run_id,
+        report_date=run.report_date,
+        report_type=run.report_type,
+        title="候选审核链报告",
+        sections=[],
+        markdown_path=str(paths[0]),
+        html_path=str(paths[1]),
+        fact_ledger_path=str(paths[2]),
+    )
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[fact],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+
+    response = client.get(f"/reports/{report.report_id}")
+
+    assert response.status_code == 200
+    assert "候选审核链" in response.text
+    assert candidate.candidate_id in response.text
+    assert snapshot.snapshot_id in response.text
+    assert "待审核" in response.text
+    assert "已批准" in response.text
+    assert "local-maintainer" in response.text
+    assert "已核对本地详情页。" in response.text
+    assert fact.fact_id in response.text
 
 
 def test_report_and_dashboard_show_coverage_and_safe_warning_summaries(tmp_path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from market_briefing.domain import (
+    CandidateReviewStatus,
     FactClassification,
     ModuleCoverageStatus,
     ReportType,
@@ -45,9 +46,16 @@ STATUS_LABELS = {
     "ok": "正常",
     "created": "已创建",
     "running": "运行中",
+    "awaiting_review": "等待审核",
     "completed": "已完成",
     "completed_with_warnings": "已完成，有警告",
     "failed": "失败",
+}
+
+CANDIDATE_REVIEW_STATUS_LABELS = {
+    CandidateReviewStatus.PENDING.value: "待审核",
+    CandidateReviewStatus.APPROVED.value: "已批准",
+    CandidateReviewStatus.REJECTED.value: "已拒绝",
 }
 
 COVERAGE_STATUS_LABELS = {
@@ -125,6 +133,10 @@ def confidence_label(value: Any) -> str:
 
 def status_label(value: Any) -> str:
     return _label(value, STATUS_LABELS)
+
+
+def candidate_review_status_label(value: Any) -> str:
+    return _label(value, CANDIDATE_REVIEW_STATUS_LABELS)
 
 
 def coverage_status_label(value: Any) -> str:
