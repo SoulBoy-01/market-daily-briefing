@@ -11,6 +11,46 @@
   <a class="button secondary" href="/">返回工作台</a>
 </section>
 
+<section class="panel">
+  <div class="panel-heading">
+    <h2>发布与运行状态</h2>
+  </div>
+  <dl class="metrics compact">
+    <div>
+      <dt>发布状态</dt>
+      <dd>正式发布</dd>
+    </div>
+    <div>
+      <dt>运行状态</dt>
+      <dd>{{ run.status|status_label }}</dd>
+    </div>
+    <div>
+      <dt>警告数量</dt>
+      <dd>{{ run.warning_count }}</dd>
+    </div>
+    <div>
+      <dt>完成时间</dt>
+      <dd>{{ run.completed_at or "未知" }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>运行事件</h2>
+    <span>{{ run_events|length }} 条事件</span>
+  </div>
+  <ul class="link-list">
+    {% for event in run_events %}
+      <li>
+        <strong>{{ event.to_status|status_label }}</strong>
+        <span>{% if event.from_status %}{{ event.from_status|status_label }} → {% endif %}{{ event.to_status|status_label }}</span>
+        <span>{{ event.created_at }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
 {% if module_coverage or run_warnings %}
 <section class="grid two-column">
   <div class="panel">
@@ -133,6 +173,54 @@
   </div>
 </section>
 
+{% if candidate_audits %}
+<section class="panel">
+  <div class="panel-heading">
+    <h2>候选审核链</h2>
+    <span>{{ candidate_audits|length }} 条候选</span>
+  </div>
+  <div class="snapshot-list">
+    {% for item in candidate_audits %}
+      <details class="snapshot" open>
+        <summary>
+          {{ item.candidate.title }}
+          <span>{{ item.candidate.candidate_id }}</span>
+        </summary>
+        <dl class="metrics compact">
+          <div>
+            <dt>候选 ID</dt>
+            <dd>{{ item.candidate.candidate_id }}</dd>
+          </div>
+          <div>
+            <dt>快照 ID</dt>
+            <dd>{{ item.candidate.snapshot_id }}</dd>
+          </div>
+          <div>
+            <dt>所属模块</dt>
+            <dd>{{ item.candidate.module|module_label }}</dd>
+          </div>
+          <div>
+            <dt>直接摘录</dt>
+            <dd>{{ item.candidate.excerpt }}</dd>
+          </div>
+        </dl>
+        <ul class="link-list">
+          {% for event in item.events %}
+            <li>
+              <strong>{{ event.to_status|candidate_review_status_label }}</strong>
+              <span>{{ event.reviewed_at }}</span>
+              {% if event.reviewer_id %}<span>审核人：{{ event.reviewer_id }}</span>{% endif %}
+              {% if event.note %}<span>{{ event.note }}</span>{% endif %}
+              {% if event.approved_fact_id %}<span>批准事实：{{ event.approved_fact_id }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <section class="panel">
   <div class="panel-heading">
     <h2>原始快照</h2>
@@ -157,6 +245,18 @@
           <div>
             <dt>原始路径</dt>
             <dd>{{ item.snapshot.raw_path }}</dd>
+          </div>
+          <div>
+            <dt>SHA-256</dt>
+            <dd>{{ item.snapshot.content_sha256 }}</dd>
+          </div>
+          <div>
+            <dt>实际提供方</dt>
+            <dd>{{ item.snapshot.provider_name or "未知" }}</dd>
+          </div>
+          <div>
+            <dt>许可引用</dt>
+            <dd>{{ item.snapshot.license_ref or "未登记" }}</dd>
           </div>
         </dl>
         <pre class="raw-content">{{ item.content }}</pre>

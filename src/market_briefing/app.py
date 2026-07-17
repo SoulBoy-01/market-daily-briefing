@@ -18,6 +18,7 @@ from market_briefing.audit import recover_orphaned_publication_directories
 from market_briefing.domain import FeedbackEntry, RawSnapshot, Report, ReportType
 from market_briefing.feedback import ALLOWED_FEEDBACK_TAGS, summarize_feedback, validate_feedback_entry
 from market_briefing.labels import (
+    candidate_review_status_label,
     confidence_label,
     coverage_status_label,
     fact_classification_label,
@@ -59,6 +60,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
 
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
     templates.env.filters["safe_source_url"] = safe_source_url
+    templates.env.filters["candidate_review_status_label"] = candidate_review_status_label
     templates.env.filters["report_type_label"] = report_type_label
     templates.env.filters["fact_classification_label"] = fact_classification_label
     templates.env.filters["source_type_label"] = source_type_label
@@ -86,6 +88,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                 ) from exc
         latest_report = reports[0] if reports else None
         review_report = _select_review_report(reports, latest_report)
+        latest_run = briefing_store.get_run(latest_report.run_id) if latest_report else None
         latest_feedback = (
             briefing_store.list_feedback(review_report.report_id) if review_report else []
         )
@@ -103,6 +106,7 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
             "dashboard.html",
             {
                 "latest_report": latest_report,
+                "latest_run": latest_run,
                 "review_report": review_report,
                 "reports": reports,
                 "latest_facts": latest_facts,
@@ -184,6 +188,9 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
         feedback = briefing_store.list_feedback(report.report_id)
         run_warnings = briefing_store.list_run_warnings(report.run_id)
         module_coverage = briefing_store.list_module_coverage(report.run_id)
+        run = briefing_store.get_run(report.run_id)
+        run_events = briefing_store.list_run_events(report.run_id)
+        candidate_audits = _candidate_audit_views(briefing_store, facts)
         return templates.TemplateResponse(
             request,
             "report.html",
@@ -194,6 +201,9 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                 feedback,
                 run_warnings=run_warnings,
                 module_coverage=module_coverage,
+                run=run,
+                run_events=run_events,
+                candidate_audits=candidate_audits,
             ),
         )
 
@@ -240,6 +250,9 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
             feedback = briefing_store.list_feedback(report.report_id)
             run_warnings = briefing_store.list_run_warnings(report.run_id)
             module_coverage = briefing_store.list_module_coverage(report.run_id)
+            run = briefing_store.get_run(report.run_id)
+            run_events = briefing_store.list_run_events(report.run_id)
+            candidate_audits = _candidate_audit_views(briefing_store, facts)
             return templates.TemplateResponse(
                 request,
                 "report.html",
@@ -257,6 +270,9 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
                     },
                     run_warnings=run_warnings,
                     module_coverage=module_coverage,
+                    run=run,
+                    run_events=run_events,
+                    candidate_audits=candidate_audits,
                 ),
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
@@ -284,6 +300,23 @@ def _snapshot_view(snapshot: RawSnapshot) -> dict[str, object]:
     return {"snapshot": snapshot, "content": content}
 
 
+def _candidate_audit_views(store: BriefingStore, facts: list[object]) -> list[dict[str, object]]:
+    candidate_ids = sorted(
+        {
+            fact.source_candidate_id
+            for fact in facts
+            if fact.source_candidate_id is not None
+        }
+    )
+    return [
+        {
+            "candidate": store.get_candidate(candidate_id),
+            "events": store.list_candidate_review_events(candidate_id),
+        }
+        for candidate_id in candidate_ids
+    ]
+
+
 def _report_template_context(
     report: Report,
     facts: list[object],
@@ -293,6 +326,9 @@ def _report_template_context(
     feedback_form: dict[str, object] | None = None,
     run_warnings: list[object] | None = None,
     module_coverage: list[object] | None = None,
+    run: object | None = None,
+    run_events: list[object] | None = None,
+    candidate_audits: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "report": report,
@@ -306,6 +342,9 @@ def _report_template_context(
         "feedback_form": feedback_form or {},
         "run_warnings": run_warnings or [],
         "module_coverage": module_coverage or [],
+        "run": run,
+        "run_events": run_events or [],
+        "candidate_audits": candidate_audits or [],
     }
 
 
