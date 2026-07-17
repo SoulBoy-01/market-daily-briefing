@@ -920,6 +920,7 @@ class BriefingStore:
                 self._validate_candidate_review_resolution(
                     connection,
                     run_id=report.run_id,
+                    facts=facts,
                 )
 
                 self._insert_snapshots(connection, snapshots)
@@ -1032,6 +1033,15 @@ class BriefingStore:
                     f"candidate {fact.source_candidate_id} belongs to run "
                     f"{candidate['run_id']}"
                 )
+            if (
+                candidate["module"] != fact.module
+                or candidate["excerpt"] != fact.claim
+                or candidate["suggested_classification"] != fact.classification.value
+            ):
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} does not match candidate "
+                    f"{fact.source_candidate_id}"
+                )
             snapshot = snapshot_by_id.get(candidate["snapshot_id"])
             if snapshot is None or fact.source_snapshot_id != snapshot.snapshot_id:
                 raise InvalidPublicationBundleError(
@@ -1063,6 +1073,7 @@ class BriefingStore:
         connection: sqlite3.Connection,
         *,
         run_id: str,
+        facts: list[AtomicFact] | None = None,
     ) -> None:
         unresolved = connection.execute(
             """
@@ -1085,6 +1096,37 @@ class BriefingStore:
             raise InvalidPublicationBundleError(
                 f"candidate {unresolved['candidate_id']} is not resolved"
             )
+        if facts is None:
+            return
+        fact_candidate_by_id = {
+            fact.fact_id: fact.source_candidate_id
+            for fact in facts
+        }
+        approved_events = connection.execute(
+            """
+            select candidates.candidate_id, events.approved_fact_id
+            from evidence_candidates as candidates
+            join candidate_review_events as events
+              on events.candidate_id = candidates.candidate_id
+            where candidates.run_id = ?
+              and events.event_id = (
+                select latest.event_id
+                from candidate_review_events as latest
+                where latest.candidate_id = candidates.candidate_id
+                order by latest.event_id desc
+                limit 1
+              )
+              and events.to_status = ?
+            order by candidates.candidate_id
+            """,
+            (run_id, CandidateReviewStatus.APPROVED.value),
+        ).fetchall()
+        for event in approved_events:
+            if fact_candidate_by_id.get(event["approved_fact_id"]) != event["candidate_id"]:
+                raise InvalidPublicationBundleError(
+                    f"candidate {event['candidate_id']} approved fact "
+                    f"{event['approved_fact_id']} is not in the publication bundle"
+                )
 
     def _validate_publication_bundle(
         self,

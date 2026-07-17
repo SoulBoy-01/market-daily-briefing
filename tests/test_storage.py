@@ -1253,6 +1253,8 @@ def test_publish_bundle_rejects_invalid_candidate_audit_links(
             _candidate(candidate_id),
             run_id=run.run_id,
             module=snapshot.module,
+            excerpt=fact.claim,
+            suggested_classification=fact.classification,
             snapshot_id=(
                 "snapshot-other" if candidate_setup == "wrong_snapshot" else snapshot.snapshot_id
             ),
@@ -1346,6 +1348,8 @@ def test_publish_bundle_accepts_complete_approved_candidate_chain(tmp_path):
         run_id=run.run_id,
         module=snapshot.module,
         snapshot_id=snapshot.snapshot_id,
+        excerpt=fact.claim,
+        suggested_classification=fact.classification,
     )
     store.save_candidate(candidate)
     store.review_candidate(
@@ -1370,6 +1374,108 @@ def test_publish_bundle_accepts_complete_approved_candidate_chain(tmp_path):
 
     assert store.get_run(run.run_id).status == RunStatus.COMPLETED
     assert store.list_facts(run.run_id) == [linked_fact]
+
+
+@pytest.mark.parametrize(
+    "fact_change",
+    [
+        {"module": "major_news"},
+        {"claim": "与候选摘录不同的事实。"},
+        {"classification": FactClassification.OPINION},
+    ],
+)
+def test_publish_bundle_rejects_candidate_fact_content_mismatch(tmp_path, fact_change):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-candidate-content",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-candidate-content",
+    )
+    candidate = replace(
+        _candidate("candidate-content"),
+        run_id=run.run_id,
+        module=snapshot.module,
+        snapshot_id=snapshot.snapshot_id,
+        excerpt=fact.claim,
+        suggested_classification=fact.classification,
+    )
+    store.save_candidate(candidate)
+    store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.APPROVED,
+        reviewer_id="local-maintainer",
+        note="已核对详情页。",
+        approved_fact_id=fact.fact_id,
+    )
+    linked_fact = replace(
+        fact,
+        source_candidate_id=candidate.candidate_id,
+        source_snapshot_id=snapshot.snapshot_id,
+        **fact_change,
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="does not match candidate"):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[linked_fact],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
+
+
+def test_publish_bundle_requires_approved_candidate_fact_in_bundle(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-candidate-fact-missing",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, _, _ = _publication_material(
+        tmp_path,
+        run,
+        suffix="-candidate-fact-missing",
+    )
+    candidate = replace(
+        _candidate("candidate-fact-missing"),
+        run_id=run.run_id,
+        module=snapshot.module,
+        snapshot_id=snapshot.snapshot_id,
+    )
+    store.save_candidate(candidate)
+    store.review_candidate(
+        candidate.candidate_id,
+        CandidateReviewStatus.APPROVED,
+        reviewer_id="local-maintainer",
+        note="已核对详情页。",
+        approved_fact_id=fact.fact_id,
+    )
+
+    with pytest.raises(InvalidPublicationBundleError, match="approved fact"):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+    assert store.list_reports() == []
+    assert store.get_run(run.run_id).status == RunStatus.RUNNING
 
 
 def test_terminal_run_rejects_candidate_append(tmp_path):
@@ -1602,6 +1708,8 @@ def test_audit_integrity_rejects_tampered_candidate_approval_link(tmp_path):
         run_id=run.run_id,
         module=snapshot.module,
         snapshot_id=snapshot.snapshot_id,
+        excerpt=fact.claim,
+        suggested_classification=fact.classification,
     )
     store.save_candidate(candidate)
     store.review_candidate(
