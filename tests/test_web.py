@@ -305,6 +305,67 @@ def test_dashboard_blocks_preview_when_published_snapshot_is_tampered(tmp_path):
     assert "审计完整性校验失败" in response.text
 
 
+def test_dashboard_blocks_when_non_preview_history_report_is_tampered(tmp_path):
+    store, client = _store_and_client(tmp_path, raise_server_exceptions=False)
+    fetched_at = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
+
+    after_close_fact = AtomicFact(
+        fact_id="fact-history-after-close",
+        run_id="run-history-after-close",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        module="market_indices",
+        claim="Published after-close fact.",
+        classification=FactClassification.FACT,
+        source_name="Fixture",
+        source_url="fixture://history/after-close",
+        source_type=SourceType.DATA_API,
+        published_at=fetched_at,
+        fetched_at=fetched_at,
+        confidence="high",
+        raw_snapshot_path="unused",
+    )
+    after_close_report = Report(
+        report_id="report-history-after-close",
+        run_id=after_close_fact.run_id,
+        report_date=after_close_fact.report_date,
+        report_type=after_close_fact.report_type,
+        title="After-close history report",
+        sections=[],
+        markdown_path="unused",
+        html_path="unused",
+        fact_ledger_path="unused",
+    )
+    _publish_report(store, tmp_path, after_close_report, facts=[after_close_fact])
+
+    pre_open_fact = replace(
+        after_close_fact,
+        fact_id="fact-history-pre-open",
+        run_id="run-history-pre-open",
+        report_date="2026-07-03",
+        report_type=ReportType.PRE_OPEN_UPDATE,
+        module="overnight_context",
+        claim="Published pre-open fact.",
+        source_url="fixture://history/pre-open",
+    )
+    pre_open_report = replace(
+        after_close_report,
+        report_id="report-history-pre-open",
+        run_id=pre_open_fact.run_id,
+        report_date=pre_open_fact.report_date,
+        report_type=pre_open_fact.report_type,
+        title="Pre-open history report",
+    )
+    _publish_report(store, tmp_path, pre_open_report, facts=[pre_open_fact])
+    damaged_snapshot = store.list_snapshots(pre_open_report.run_id)[0]
+    Path(damaged_snapshot.raw_path).write_text("tampered", encoding="utf-8")
+
+    response = client.get("/")
+
+    assert response.status_code == 409
+    assert "审计完整性校验失败" in response.text
+
+
 def test_feedback_blocks_when_published_snapshot_is_tampered(tmp_path):
     store, client = _store_and_client(tmp_path, raise_server_exceptions=False)
     run_response = _run_fixture(client)

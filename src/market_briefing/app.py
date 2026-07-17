@@ -76,16 +76,16 @@ def create_app(config: AppConfig | None = None, store: BriefingStore | None = No
     @app.get("/")
     def dashboard(request: Request):
         reports = briefing_store.list_reports()
-        latest_report = reports[0] if reports else None
-        review_report = _select_review_report(reports, latest_report)
-        if review_report:
+        for report in reports:
             try:
-                briefing_store.assert_report_integrity(review_report.report_id)
+                briefing_store.assert_report_integrity(report.report_id)
             except AuditIntegrityError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="审计完整性校验失败",
                 ) from exc
+        latest_report = reports[0] if reports else None
+        review_report = _select_review_report(reports, latest_report)
         latest_feedback = (
             briefing_store.list_feedback(review_report.report_id) if review_report else []
         )
