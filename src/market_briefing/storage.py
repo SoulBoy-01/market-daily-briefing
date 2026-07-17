@@ -898,6 +898,12 @@ class BriefingStore:
                         f"to {target_status.value}"
                     )
                 self._assert_run_has_no_normal_ledger_records(connection, report.run_id)
+                self._validate_candidate_audit_links(
+                    connection,
+                    facts=facts,
+                    snapshots=snapshots,
+                    run_id=report.run_id,
+                )
 
                 self._insert_snapshots(connection, snapshots)
                 self._insert_facts(connection, facts)
@@ -982,6 +988,58 @@ class BriefingStore:
                 f"run {run_id} already has normal ledger records: "
                 f"{', '.join(occupied_tables)}"
             )
+
+    @staticmethod
+    def _validate_candidate_audit_links(
+        connection: sqlite3.Connection,
+        *,
+        facts: list[AtomicFact],
+        snapshots: list[RawSnapshot],
+        run_id: str,
+    ) -> None:
+        snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
+        for fact in facts:
+            if not fact.source_candidate_id:
+                continue
+            candidate = connection.execute(
+                "select * from evidence_candidates where candidate_id = ?",
+                (fact.source_candidate_id,),
+            ).fetchone()
+            if candidate is None:
+                raise InvalidPublicationBundleError(
+                    f"fact {fact.fact_id} references missing candidate "
+                    f"{fact.source_candidate_id}"
+                )
+            if candidate["run_id"] != run_id:
+                raise InvalidPublicationBundleError(
+                    f"candidate {fact.source_candidate_id} belongs to run "
+                    f"{candidate['run_id']}"
+                )
+            snapshot = snapshot_by_id.get(candidate["snapshot_id"])
+            if snapshot is None or fact.source_snapshot_id != snapshot.snapshot_id:
+                raise InvalidPublicationBundleError(
+                    f"candidate {fact.source_candidate_id} does not match snapshot "
+                    f"{fact.source_snapshot_id}"
+                )
+            review = connection.execute(
+                """
+                select to_status, approved_fact_id
+                from candidate_review_events
+                where candidate_id = ?
+                order by event_id desc
+                limit 1
+                """,
+                (fact.source_candidate_id,),
+            ).fetchone()
+            if review is None or review["to_status"] != CandidateReviewStatus.APPROVED.value:
+                raise InvalidPublicationBundleError(
+                    f"candidate {fact.source_candidate_id} is not approved"
+                )
+            if review["approved_fact_id"] != fact.fact_id:
+                raise InvalidPublicationBundleError(
+                    f"candidate {fact.source_candidate_id} does not approve fact "
+                    f"{fact.fact_id}"
+                )
 
     def _validate_publication_bundle(
         self,
