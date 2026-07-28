@@ -23,6 +23,13 @@ Build a market briefing MVP that practices loop engineering:
 
 ## Development Practice
 
+- Use the Matt Pocock engineering workflow for planning and execution:
+  - use `ask-matt` to route work when the appropriate workflow is unclear;
+  - use `grill-with-docs` to refine requirements while preserving decisions in repository documentation;
+  - use `wayfinder` for decision-heavy work that is too large or uncertain for one session;
+  - use `to-spec` and `to-tickets` for multi-session builds after the relevant decisions are settled;
+  - use `implement` for scoped execution, including its TDD, review, verification, and commit loop.
+- Do not use Superpowers skills as the default planning workflow. Use them only when the user explicitly requests them.
 - Use TDD for behavior changes and bug fixes: write or update a failing test first, then implement.
 - For review feedback, fix blocking correctness and safety issues before polish.
 - For frontend work, keep the UI useful as an app, not a landing page.
