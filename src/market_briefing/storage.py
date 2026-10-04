@@ -346,9 +346,6 @@ class BriefingStore:
             for row in rows
         ]
 
-    def save_run(self, run: Run) -> None:
-        self.create_run(run)
-
     @staticmethod
     def _run_values(run: Run) -> tuple[Any, ...]:
         return (
@@ -1305,9 +1302,6 @@ class BriefingStore:
                 raise InvalidPublicationBundleError(
                     f"coverage {coverage.coverage_id} belongs to run {coverage.run_id}"
                 )
-
-    def published_run_ids(self) -> set[str]:
-        return {run_id for _, _, run_id in self.published_run_locations()}
 
     def published_run_locations(self) -> set[tuple[str, str, str]]:
         with self.connection() as connection:
