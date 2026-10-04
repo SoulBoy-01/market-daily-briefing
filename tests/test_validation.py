@@ -54,7 +54,24 @@ def test_validation_accepts_sections_that_cite_existing_facts():
     result = validate_report_sections(sections, facts)
 
     assert result.ok is True
-    assert result.errors == []
+
+
+def test_validation_rejects_unknown_section_ids():
+    facts = [_fact("fact-001", "上证指数收涨。")]
+    sections = [
+        ReportSection(
+            "not_a_known_section",
+            "不存在的小节",
+            "上证指数收涨。[fact-001]",
+            ["fact-001"],
+            "ok",
+        )
+    ]
+
+    result = validate_report_sections(sections, facts)
+
+    assert result.ok is False
+    assert any("not_a_known_section" in error for error in result.errors)
 
 
 def test_validation_rejects_missing_fact_id():

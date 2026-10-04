@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 
 from market_briefing.domain import AtomicFact, FactClassification, ReportSection
+from market_briefing.labels import SECTION_LABELS
 
 
 BANNED_PHRASES = (
@@ -21,6 +22,8 @@ BANNED_PHRASES = (
 )
 
 FACT_CITATION_RE = re.compile(r"\[(fact[-_\w:.]+)\]")
+
+KNOWN_SECTION_IDS = frozenset(SECTION_LABELS)
 
 SECTION_CLASS_RULES = {
     "one_sentence_conclusion": {
@@ -62,6 +65,9 @@ def validate_report_sections(
     errors: list[str] = []
 
     for section in sections:
+        if section.section_id not in KNOWN_SECTION_IDS:
+            errors.append(f"section {section.section_id} is not a known section id")
+            continue
         for fact_line in section.fact_lines:
             fact = fact_by_id.get(fact_line.fact_id)
             if fact is None:
