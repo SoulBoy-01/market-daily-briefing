@@ -31,6 +31,7 @@ from market_briefing.storage import (
     InvalidRunTransitionError,
     RunAlreadyExistsError,
     PublishedRecordExistsError,
+    SCHEMA,
     build_report_paths,
 )
 
@@ -548,6 +549,165 @@ def test_initialize_backfills_only_legacy_terminal_reports_as_published(tmp_path
         store.get_published_report("legacy-hidden-incomplete-terminal")
     with pytest.raises(KeyError):
         store.get_published_report("legacy-hidden-orphan")
+
+
+SCHEMA_TABLES = (
+    "runs",
+    "run_events",
+    "source_snapshots",
+    "evidence_candidates",
+    "candidate_review_events",
+    "facts",
+    "run_warnings",
+    "module_coverage",
+    "reports",
+    "feedback",
+)
+
+
+def _create_legacy_tables(connection: sqlite3.Connection) -> None:
+    """最老支持形状：缺所有后续迁移新增的列。新列必须只经 _migrate_schema 补齐。"""
+    connection.executescript(
+        """
+        create table runs (
+            run_id text primary key,
+            report_date text not null,
+            report_type text not null,
+            enabled_modules text not null,
+            status text not null,
+            created_at text not null,
+            started_at text,
+            completed_at text,
+            warning_count integer not null default 0,
+            error_message text
+        );
+        create table source_snapshots (
+            snapshot_id text primary key,
+            run_id text not null,
+            module text not null,
+            source_name text not null,
+            source_url text not null,
+            source_type text not null,
+            fetched_at text not null,
+            content_type text not null,
+            raw_path text not null,
+            metadata text not null
+        );
+        create table evidence_candidates (
+            candidate_id text primary key,
+            run_id text not null,
+            snapshot_id text not null,
+            module text not null,
+            title text not null,
+            detail_url text not null,
+            published_at text,
+            excerpt text not null,
+            suggested_classification text not null,
+            created_at text not null
+        );
+        create table candidate_review_events (
+            event_id integer primary key autoincrement,
+            candidate_id text not null,
+            from_status text,
+            to_status text not null,
+            reviewed_at text not null,
+            reviewer_id text,
+            note text not null,
+            approved_fact_id text
+        );
+        create table facts (
+            fact_id text primary key,
+            run_id text not null,
+            report_date text not null,
+            report_type text not null,
+            module text not null,
+            claim text not null,
+            classification text not null,
+            source_name text not null,
+            source_url text not null,
+            source_type text not null,
+            published_at text,
+            fetched_at text not null,
+            confidence text not null,
+            raw_snapshot_path text not null,
+            derived_from_fact_ids text not null,
+            used_in_sections text not null
+        );
+        create table run_warnings (
+            warning_id text primary key,
+            run_id text not null,
+            source_name text not null,
+            module text not null,
+            message text not null,
+            detail text,
+            created_at text not null
+        );
+        create table module_coverage (
+            coverage_id text primary key,
+            run_id text not null,
+            module text not null,
+            status text not null,
+            source_name text,
+            message text not null,
+            recorded_at text not null
+        );
+        create table reports (
+            report_id text primary key,
+            run_id text not null,
+            report_date text not null,
+            report_type text not null,
+            title text not null,
+            sections text not null,
+            markdown_path text not null,
+            html_path text not null,
+            fact_ledger_path text not null
+        );
+        create table feedback (
+            feedback_id text primary key,
+            report_id text not null,
+            section_id text not null,
+            score integer not null,
+            tags text not null,
+            note text not null,
+            created_at text not null
+        );
+        """
+    )
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    return sorted(row[1] for row in connection.execute(f"pragma table_info({table})"))
+
+
+def test_initialize_bring_legacy_tables_to_current_schema_columns(tmp_path):
+    database_path = tmp_path / "legacy-all-tables.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        _create_legacy_tables(connection)
+        connection.execute(
+            "insert into runs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-run",
+                "2026-07-01",
+                "after_close",
+                '["market_indices"]',
+                "completed",
+                "2026-07-01T07:00:00+00:00",
+                "2026-07-01T07:00:01+00:00",
+                "2026-07-01T07:05:00+00:00",
+                0,
+                None,
+            ),
+        )
+
+    fresh = sqlite3.connect(":memory:")
+    fresh.executescript(SCHEMA)
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        for table in SCHEMA_TABLES:
+            assert _table_columns(connection, table) == _table_columns(fresh, table), table
 
 
 def test_candidate_is_insert_only_and_starts_with_pending_review_event(tmp_path):
