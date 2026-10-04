@@ -98,8 +98,15 @@ def build_report_paths(
 
 
 class BriefingStore:
-    def __init__(self, database_path: Path):
+    def __init__(
+        self,
+        database_path: Path,
+        trusted_roots: tuple[Path, ...] | None = None,
+    ):
         self.database_path = database_path
+        self.trusted_roots = (
+            tuple(Path(root).resolve() for root in trusted_roots) if trusted_roots else ()
+        )
 
     def connect(self) -> sqlite3.Connection:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1169,6 +1176,11 @@ class BriefingStore:
                     f"{event['approved_fact_id']} is not in the publication bundle"
                 )
 
+    def _assert_path_within_trusted_roots(self, path: str) -> None:
+        resolved = Path(path).resolve()
+        if not any(resolved.is_relative_to(root) for root in self.trusted_roots):
+            raise InvalidPublicationBundleError(f"path {path} is outside the trusted roots")
+
     def _validate_publication_bundle(
         self,
         *,
@@ -1215,6 +1227,15 @@ class BriefingStore:
                 raise InvalidPublicationBundleError(
                     f"missing {label} file for {report.report_id}: {path}"
                 )
+        if self.trusted_roots:
+            for path in (
+                report.markdown_path,
+                report.html_path,
+                report.fact_ledger_path,
+                *(snapshot.raw_path for snapshot in snapshots),
+                *(fact.raw_snapshot_path for fact in facts),
+            ):
+                self._assert_path_within_trusted_roots(path)
 
         snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
         if len(snapshot_by_id) != len(snapshots):
