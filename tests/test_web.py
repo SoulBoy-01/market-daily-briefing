@@ -709,6 +709,25 @@ def test_dashboard_rejects_unsafe_fixture_run_inputs(tmp_path):
         assert response.status_code == 400
 
 
+def test_run_fixture_rejects_non_calendar_dates_as_bad_request(tmp_path):
+    client = _client(tmp_path, raise_server_exceptions=False)
+
+    for report_date in ("2026-02-30", "2026-13-45", "2026-00-10"):
+        response = client.post(
+            "/runs/fixture",
+            data={
+                "run_id": "safe-run",
+                "report_date": report_date,
+                "report_type": "after_close",
+                "fixture_path": "tests/fixtures/after_close_sources.json",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 400, report_date
+        assert "report_date" in response.json()["detail"], report_date
+
+
 def test_default_app_normalizes_default_paths_under_project_root(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     project_root = default_config_path().parent.parent

@@ -14,7 +14,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from market_briefing.config import AppConfig, load_config
-from market_briefing.audit import recover_orphaned_publication_directories
+from market_briefing.audit import (
+    UnsafeAuditPathError,
+    recover_orphaned_publication_directories,
+    validate_report_date,
+)
 from market_briefing.domain import FeedbackEntry, RawSnapshot, Report, ReportType
 from market_briefing.feedback import ALLOWED_FEEDBACK_TAGS, summarize_feedback, validate_feedback_entry
 from market_briefing.labels import (
@@ -38,7 +42,6 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
-REPORT_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SAFE_SOURCE_SCHEMES = {"fixture", "http", "https"}
 CHINA_MARKET_TIMEZONE = timezone(timedelta(hours=8))
 
@@ -357,11 +360,13 @@ def _validate_run_id(run_id: str) -> None:
 
 
 def _validate_report_date(report_date: str) -> None:
-    if not REPORT_DATE_PATTERN.fullmatch(report_date):
+    try:
+        validate_report_date(report_date)
+    except UnsafeAuditPathError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="report_date 必须使用 YYYY-MM-DD 格式",
-        )
+        ) from exc
 
 
 def _validate_fixture_path(fixture_path: str) -> Path:
