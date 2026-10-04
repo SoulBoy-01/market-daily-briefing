@@ -1045,3 +1045,43 @@ def test_report_blocks_unsafe_source_url_links(tmp_path):
     assert response.status_code == 200
     assert "javascript:alert(1)" in response.text
     assert 'href="javascript:alert(1)"' not in response.text
+
+
+def test_app_startup_moves_orphan_directories_to_diagnostics(tmp_path):
+    config = _config(tmp_path)
+    store = BriefingStore(config.database_path)
+    orphan_raw = config.raw_dir / "2026-07-02" / "orphan-run"
+    orphan_raw.mkdir(parents=True)
+    (orphan_raw / "001-market_indices.json").write_text("{}", encoding="utf-8")
+    orphan_report = config.reports_dir / "2026-07-02" / "after_close" / "orphan-run"
+    orphan_report.mkdir(parents=True)
+    (orphan_report / "briefing.md").write_text("orphan", encoding="utf-8")
+
+    create_app(config=config, store=store)
+
+    diagnostics_run = tmp_path / "diagnostics" / "2026-07-02" / "orphan-run"
+    assert (diagnostics_run / "orphan-raw" / "001-market_indices.json").is_file()
+    assert (diagnostics_run / "orphan-report-after_close" / "briefing.md").is_file()
+    assert not orphan_raw.exists()
+    assert not orphan_report.exists()
+
+
+def test_app_startup_preserves_published_run_directories(tmp_path):
+    store, client = _store_and_client(tmp_path)
+    response = client.post(
+        "/runs/fixture",
+        data={
+            "run_id": "startup-keep",
+            "report_date": "2026-07-02",
+            "report_type": "after_close",
+            "fixture_path": "tests/fixtures/after_close_sources.json",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    create_app(config=_config(tmp_path), store=store)
+
+    assert (tmp_path / "raw" / "2026-07-02" / "startup-keep").is_dir()
+    assert (tmp_path / "reports" / "2026-07-02" / "after_close" / "startup-keep").is_dir()
+    assert not (tmp_path / "diagnostics" / "2026-07-02").exists()
