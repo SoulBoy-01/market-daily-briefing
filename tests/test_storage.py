@@ -1,5 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -1845,6 +1847,182 @@ def test_audit_integrity_rejects_missing_or_tampered_published_snapshot(tmp_path
 
     with pytest.raises(AuditIntegrityError, match="snapshot-integrity"):
         store.assert_report_integrity(report.report_id)
+
+
+def test_publish_run_bundle_persists_report_artifact_hashes(tmp_path):
+    store = BriefingStore(tmp_path / "briefing.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id="run-artifact-hashes",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, warning, coverage = _publication_material(tmp_path, run)
+    Path(report.markdown_path).write_text("distinct markdown artifact", encoding="utf-8")
+
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[fact],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+
+    with sqlite3.connect(store.database_path) as connection:
+        row = connection.execute(
+            "select markdown_sha256, html_sha256 from reports where report_id = ?",
+            (report.report_id,),
+        ).fetchone()
+    assert row[0] == sha256(Path(report.markdown_path).read_bytes()).hexdigest()
+    assert row[1] == sha256(Path(report.html_path).read_bytes()).hexdigest()
+    assert row[0] != row[1]
+
+
+def _publish_report_with_artifacts(tmp_path, run_id: str) -> tuple[BriefingStore, Report]:
+    store = BriefingStore(tmp_path / f"briefing-{run_id}.sqlite")
+    store.initialize()
+    run = Run.create(
+        run_id=run_id,
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, warning, coverage = _publication_material(tmp_path, run)
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[fact],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+    return store, report
+
+
+def test_audit_integrity_rejects_tampered_published_markdown(tmp_path):
+    store, report = _publish_report_with_artifacts(tmp_path, "run-tamper-md")
+    store.assert_report_integrity(report.report_id)
+    Path(report.markdown_path).write_text("tampered after publish", encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="markdown"):
+        store.assert_report_integrity(report.report_id)
+
+
+def test_audit_integrity_rejects_tampered_published_html(tmp_path):
+    store, report = _publish_report_with_artifacts(tmp_path, "run-tamper-html")
+    store.assert_report_integrity(report.report_id)
+    Path(report.html_path).write_text("<p>tampered</p>", encoding="utf-8")
+
+    with pytest.raises(AuditIntegrityError, match="html"):
+        store.assert_report_integrity(report.report_id)
+
+
+def test_audit_integrity_rejects_missing_report_artifact_hash(tmp_path):
+    store, report = _publish_report_with_artifacts(tmp_path, "run-missing-hash")
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "update reports set markdown_sha256 = '' where report_id = ?",
+            (report.report_id,),
+        )
+
+    with pytest.raises(AuditIntegrityError, match="markdown"):
+        store.assert_report_integrity(report.report_id)
+
+
+def test_initialize_backfills_report_artifact_hashes_for_existing_legacy_files(tmp_path):
+    database_path = tmp_path / "legacy-report-hashes.sqlite"
+    markdown_file = tmp_path / "legacy-visible.md"
+    html_file = tmp_path / "legacy-visible.html"
+    markdown_file.write_text("legacy markdown artifact", encoding="utf-8")
+    html_file.write_text("legacy html artifact", encoding="utf-8")
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            create table runs (
+                run_id text primary key,
+                report_date text not null,
+                report_type text not null,
+                enabled_modules text not null,
+                status text not null,
+                created_at text not null,
+                started_at text,
+                completed_at text,
+                warning_count integer not null default 0,
+                error_message text
+            );
+            create table reports (
+                report_id text primary key,
+                run_id text not null,
+                report_date text not null,
+                report_type text not null,
+                title text not null,
+                sections text not null,
+                markdown_path text not null,
+                html_path text not null,
+                fact_ledger_path text not null
+            );
+            """
+        )
+        connection.execute(
+            "insert into runs values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-completed",
+                "2026-07-01",
+                "after_close",
+                "[]",
+                "completed",
+                "2026-07-01T08:00:00+00:00",
+                "2026-07-01T08:01:00+00:00",
+                "2026-07-01T08:05:00+00:00",
+                0,
+                None,
+            ),
+        )
+        connection.executemany(
+            "insert into reports values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    "legacy-visible",
+                    "legacy-completed",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy visible report",
+                    "[]",
+                    str(markdown_file),
+                    str(html_file),
+                    "legacy-visible.json",
+                ),
+                (
+                    "legacy-missing-files",
+                    "legacy-completed",
+                    "2026-07-01",
+                    "after_close",
+                    "Legacy report with missing artifacts",
+                    "[]",
+                    str(tmp_path / "absent.md"),
+                    str(tmp_path / "absent.html"),
+                    "absent.json",
+                ),
+            ],
+        )
+
+    store = BriefingStore(database_path)
+    store.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        rows = dict(
+            (row[0], (row[1], row[2]))
+            for row in connection.execute(
+                "select report_id, markdown_sha256, html_sha256 from reports"
+            )
+        )
+    assert rows["legacy-visible"] == (
+        sha256(markdown_file.read_bytes()).hexdigest(),
+        sha256(html_file.read_bytes()).hexdigest(),
+    )
+    assert rows["legacy-missing-files"] == ("", "")
 
 
 def test_audit_integrity_rejects_tampered_candidate_approval_link(tmp_path):

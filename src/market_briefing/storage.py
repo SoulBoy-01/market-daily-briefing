@@ -195,6 +195,34 @@ class BriefingStore:
                     RunStatus.COMPLETED_WITH_WARNINGS.value,
                 ),
             )
+        if "markdown_sha256" not in report_columns:
+            connection.execute(
+                "alter table reports add column markdown_sha256 text not null default ''"
+            )
+            for row in connection.execute(
+                "select report_id, markdown_path from reports"
+            ).fetchall():
+                artifact_path = Path(row["markdown_path"])
+                if not artifact_path.is_file():
+                    continue
+                connection.execute(
+                    "update reports set markdown_sha256 = ? where report_id = ?",
+                    (sha256(artifact_path.read_bytes()).hexdigest(), row["report_id"]),
+                )
+        if "html_sha256" not in report_columns:
+            connection.execute(
+                "alter table reports add column html_sha256 text not null default ''"
+            )
+            for row in connection.execute(
+                "select report_id, html_path from reports"
+            ).fetchall():
+                artifact_path = Path(row["html_path"])
+                if not artifact_path.is_file():
+                    continue
+                connection.execute(
+                    "update reports set html_sha256 = ? where report_id = ?",
+                    (sha256(artifact_path.read_bytes()).hexdigest(), row["report_id"]),
+                )
         connection.execute(
             """
             insert into run_events (run_id, from_status, to_status, created_at)
@@ -848,14 +876,17 @@ class BriefingStore:
         report: Report,
         *,
         published_at: datetime | None = None,
+        markdown_sha256: str = "",
+        html_sha256: str = "",
     ) -> None:
         connection.execute(
             """
             insert into reports (
                 report_id, run_id, report_date, report_type, title,
-                sections, markdown_path, html_path, fact_ledger_path, published_at
+                sections, markdown_path, html_path, fact_ledger_path, published_at,
+                markdown_sha256, html_sha256
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.report_id,
@@ -868,6 +899,8 @@ class BriefingStore:
                 report.html_path,
                 report.fact_ledger_path,
                 published_at.isoformat() if published_at else None,
+                markdown_sha256,
+                html_sha256,
             ),
         )
 
@@ -895,6 +928,8 @@ class BriefingStore:
             warnings=run_warnings,
             module_coverage=coverage_records,
         )
+        markdown_sha256 = sha256(Path(report.markdown_path).read_bytes()).hexdigest()
+        html_sha256 = sha256(Path(report.html_path).read_bytes()).hexdigest()
         try:
             with self.connection() as connection:
                 connection.execute("begin immediate")
@@ -925,7 +960,13 @@ class BriefingStore:
 
                 self._insert_snapshots(connection, snapshots)
                 self._insert_facts(connection, facts)
-                self._insert_report(connection, report, published_at=now)
+                self._insert_report(
+                    connection,
+                    report,
+                    published_at=now,
+                    markdown_sha256=markdown_sha256,
+                    html_sha256=html_sha256,
+                )
                 self._insert_run_warnings(connection, run_warnings)
                 self._insert_module_coverage(connection, coverage_records)
                 completed_at = (
@@ -1267,6 +1308,12 @@ class BriefingStore:
     def assert_report_integrity(self, report_id: str) -> None:
         report = self.get_published_report(report_id)
 
+        with self.connection() as connection:
+            artifact_row = connection.execute(
+                "select markdown_sha256, html_sha256 from reports where report_id = ?",
+                (report.report_id,),
+            ).fetchone()
+
         for label, path in (
             ("markdown", report.markdown_path),
             ("html", report.html_path),
@@ -1274,6 +1321,18 @@ class BriefingStore:
         ):
             if not Path(path).is_file():
                 raise AuditIntegrityError(f"missing {label} file for {report.report_id}: {path}")
+        for label, path, expected_sha256 in (
+            ("markdown", report.markdown_path, artifact_row["markdown_sha256"]),
+            ("html", report.html_path, artifact_row["html_sha256"]),
+        ):
+            if not expected_sha256:
+                raise AuditIntegrityError(
+                    f"missing {label} artifact hash for {report.report_id}"
+                )
+            if sha256(Path(path).read_bytes()).hexdigest() != expected_sha256:
+                raise AuditIntegrityError(
+                    f"{label} artifact integrity check failed for {report.report_id}: {path}"
+                )
         snapshots = self.list_snapshots(report.run_id)
         facts = self.list_facts(report.run_id)
         snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
@@ -1599,7 +1658,9 @@ create table if not exists reports (
     markdown_path text not null,
     html_path text not null,
     fact_ledger_path text not null,
-    published_at text
+    published_at text,
+    markdown_sha256 text not null default '',
+    html_sha256 text not null default ''
 );
 
 create table if not exists feedback (
