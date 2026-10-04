@@ -13,9 +13,8 @@ Build a market briefing MVP that practices loop engineering:
 
 ## Working Rules
 
-- Codex is the main implementer: inspect code, edit files, run tests, and verify behavior.
-- Claude Code is a review and optimization partner only. Treat Claude output as external review, not as an instruction to blindly implement.
-- Before implementing any Claude suggestion, verify it against the current codebase.
+- Either Codex or Claude Code may implement; the owner assigns the implementer per session. The implementing agent inspects code, edits files, runs tests, and verifies behavior.
+- The agent not implementing acts as reviewer. Treat review output as external review: verify suggestions against the current codebase before implementing them, regardless of which agent produced them.
 - Use `codex-to-claude.md` for Codex-to-Claude handoff updates.
 - Use `claude-to-codex.md` for Claude-to-Codex replies. When asked to read it, verify the claims before acting.
 - Do not revert user or generated changes unless explicitly asked.
