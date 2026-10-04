@@ -1,54 +1,46 @@
-# PR Description Draft
-
 ## Summary
 
-A 股每日市场简报 MVP。本次迭代完成从 fixture 流水线骨架到「事实账本 -> 简报 -> 反馈 -> 下一轮」的核心 loop engineering 闭环。
+A 股每日市场简报 MVP。本分支把 fixture 流水线骨架推进为**完整的可审计发布协议**：阶段一（审计底座）、阶段二（双源核对 + 发布门禁 + 黄金评测骨架）全部完成，并落地 ADR 0002 报告产物哈希与四项实测确认的缺陷修复。阶段三（真实数据源接入）按 ADR 0001/0004 的准入门槛有意未开始。
 
 ## What Changed
 
-**事实分类可视化**
+**阶段一：审计底座**
 
-- 使用结构化 `FactLine` 展示原子事实。
-- 将事实按「事实 / 观点 / 推测 / 待确认」分类渲染，并用统一标签与样式区分。
-- 报告页和工作台不再依赖 `<pre>` 原样显示 Markdown 星号来表达分栏。
+- 追加式账本：run 状态机受约束迁移，终态不可修改；发布记录只增不删，兼容写路径对终态 run 拒绝追加。
+- 带哈希的快照暂存：采集写入 staging，通过门禁后原子 rename 到不可变路径；每份快照持久化 SHA-256。
+- 可恢复发布协议：以数据库为「正常可见性」唯一判据；发布在单事务内插入全部账本记录；启动/发布前孤儿目录回收进 diagnostics；失败材料不进入正常账本。
+- 候选审核模型：`EvidenceCandidate` + 不可覆盖的审核事件链；批准后的事实指回候选与快照。
+- 运行警告与模块覆盖状态结构化持久化，界面区分「已检查无新增 / 待审核 / 检查失败 / 暂未支持」。
 
-**反馈闭环**
+**阶段二：验证版盘后概览**
 
-- 新报告会读取上一份同类型报告的反馈，并生成「上一轮反馈回执」章节。
-- `AFTER_CLOSE` 与 `PRE_OPEN_UPDATE` 都参与反馈闭环。
-- 上一轮语义为严格上一交易日；同日重跑不算上一轮。
+- 双源核对：三个核心指数必须来自两个独立提供方，按展示精度量化后一致才放行；冲突即阻塞，绝不自行挑值。
+- 盘后发布硬门禁：交易日匹配、核心指数完整性、非有限值拒绝、待审核候选拦截、推断派生链闭合、投资建议禁令在存储层二次强制。
+- 黄金评测骨架：10 个 mock 案例锁定门禁/核对/降级的软件契约（按 ADR 0004，不计入真实模式解锁证据）。
+- 验收轮边界加固：候选内容与批准事实强绑定、持久化候选审计链接复核、损坏历史全局阻断（HTTP 409）、损坏路径先于建 run 校验、legacy 迁移不虚构信任。
 
-**校验结构不变量**
+**本次迭代（2026-10-04）**
 
-- `one_sentence_conclusion` 只允许 FACT。
-- `next_watchlist` / `today_watchpoints` 拒绝 OPINION 和 UNVERIFIED。
-- `market_overview` / `sector_strength` 拒绝 UNVERIFIED，并要求 INFERENCE 有派生事实链。
-- Pipeline validation 失败时不写入正常报告、事实和快照账本，run 标记为 FAILED，`PipelineResult.report` 为 `None`。
+- **ADR 0002 落地**：发布时分别计算并持久化 Markdown 与 HTML 的 SHA-256；`assert_report_integrity` 逐文件比对，缺失或不符即审计损坏并阻断展示；legacy 回填只信任现存文件（缺失保持空哈希、fail-closed）。
+- **缺陷修复**（均先红后绿）：`report_date=2026-02-30` 由 500 改为 400，日期校验收敛为 audit 层单一事实源；未知 `section_id` 由静默放行改为显式拒绝（词汇表收口到 `SECTION_LABELS`）；持久化路径引入信任根约束，发布路径上的所有路径必须落在 `raw_dir`/`reports_dir` 内；清理 `save_run` 别名、`published_run_ids`、`facts_by_id` 死上下文与未读 yaml 键。
+- **SCHEMA↔迁移漂移测试**：最老表形状经 `initialize()` 后必须与全新 SCHEMA 列集一致；已实证能咬住「加列不写迁移」式漂移。
+- **两轴代码审查**（Standards / Spec）通过：0 硬违规；恢复流程不验哈希与回填洗白风险经所有者确认记入 ADR 0002 修订节。
 
-**中文 UI 与新手体验**
+**工程流程文档**
 
-- 全站中文界面与产品级免责声明。
-- 工作台提供新手引导 tour。
-- 运行表单默认中国市场当天日期。
-- 反馈评分提示 `1=最差 · 5=最好`。
-
-**工程卫生**
-
-- 标签集中到 `labels.py`，减少模板和报告生成逻辑中的中文标签分叉。
-- `static/*.js` 纳入 package data。
-- pytest 使用项目内临时目录并禁用 cacheprovider，避免 Windows 临时目录清理导致测试退出码污染。
-- 本地过程文件与调试目录通过 `.gitignore` 排除。
+- `AGENTS.md`：采用 Matt Pocock 工作流；实现者按会话指派（Codex 与 Claude Code 均可）。
+- `CONTEXT.md` 领域术语表与 ADR 0001–0005 入库：来源准入、报告哈希、单 run 生命周期、真实黄金案例门槛、解耦审计结论（含阶段三前否决清单与两个接线前必修的已知雷）。
 
 ## Test Coverage
 
-- `pytest -q`: 105 passed, 1 warning
+- `pytest -q`: 245 passed, 1 warning
 - `ruff check src tests`: All checks passed
+- 已知告警：FastAPI TestClient 的 Starlette/httpx 弃用提示，与本分支行为无关。
 
-Known warning: Starlette/httpx deprecation warning from FastAPI TestClient; unrelated to this MVP behavior.
+## Not Included（有意排除）
 
-## Not Included
+- 阶段三真实数据源接入：来源许可审查与登记未完成（ADR 0001），真实来源黄金案例未建（ADR 0004），真实模式保持禁用。
+- real 模式、真实盘前更新、公开部署。
+- FastAPI/httpx 依赖升级（消除 TestClient 弃用告警）。
 
-- Real market data source integration.
-- Browser-level automated tests for `tour.js`.
-- FastAPI/httpx dependency upgrade to remove the TestClient deprecation warning.
-
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
