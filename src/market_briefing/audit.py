@@ -20,12 +20,18 @@ class SnapshotFile:
     content_sha256: str
 
 
-def run_directory(root: Path, report_date: str, run_id: str) -> Path:
+def validate_report_date(value: str) -> None:
     try:
-        parsed_date = date.fromisoformat(report_date)
+        parsed_date = date.fromisoformat(value)
     except ValueError as exc:
-        raise UnsafeAuditPathError(f"invalid report date: {report_date}") from exc
-    if parsed_date.isoformat() != report_date or not SAFE_RUN_ID_RE.fullmatch(run_id):
+        raise UnsafeAuditPathError(f"invalid report date: {value}") from exc
+    if parsed_date.isoformat() != value:
+        raise UnsafeAuditPathError(f"invalid report date: {value}")
+
+
+def run_directory(root: Path, report_date: str, run_id: str) -> Path:
+    validate_report_date(report_date)
+    if not SAFE_RUN_ID_RE.fullmatch(run_id):
         raise UnsafeAuditPathError(f"unsafe run path: {report_date}/{run_id}")
 
     resolved_root = root.resolve()
@@ -102,7 +108,7 @@ def recover_orphaned_publication_directories(
 
     if reports_dir.exists():
         for date_dir in _child_directories(reports_dir):
-            _validate_report_date(date_dir.name)
+            validate_report_date(date_dir.name)
             for report_type_dir in _child_directories(date_dir):
                 _validate_path_component(report_type_dir.name)
                 for run_dir in _child_directories(report_type_dir):
@@ -134,15 +140,6 @@ def recover_orphaned_publication_directories(
 
 def _child_directories(root: Path) -> list[Path]:
     return sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name)
-
-
-def _validate_report_date(value: str) -> None:
-    try:
-        parsed_date = date.fromisoformat(value)
-    except ValueError as exc:
-        raise UnsafeAuditPathError(f"invalid report date: {value}") from exc
-    if parsed_date.isoformat() != value:
-        raise UnsafeAuditPathError(f"invalid report date: {value}")
 
 
 def _validate_path_component(value: str) -> None:
