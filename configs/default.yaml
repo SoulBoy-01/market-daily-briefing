@@ -4,14 +4,9 @@ app:
   staging_dir: data/staging
   diagnostics_dir: data/diagnostics
   reports_dir: reports
-  default_report_date_timezone: Asia/Shanghai
 
 generation:
   provider: template
-  openai_compatible:
-    base_url_env: OPENAI_BASE_URL
-    api_key_env: OPENAI_API_KEY
-    model_env: OPENAI_MODEL
 
 report_types:
   after_close:

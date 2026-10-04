@@ -339,7 +339,6 @@ def _report_template_context(
     return {
         "report": report,
         "facts": facts,
-        "facts_by_id": {fact.fact_id: fact for fact in facts},
         "snapshots": [_snapshot_view(snapshot) for snapshot in snapshots],
         "feedback": feedback,
         "feedback_summary": summarize_feedback(feedback),

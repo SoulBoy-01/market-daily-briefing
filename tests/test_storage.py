@@ -151,7 +151,7 @@ def test_store_initializes_schema_and_round_trips_run(tmp_path):
         enabled_modules=["market_indices"],
     )
 
-    store.save_run(run)
+    store.create_run(run)
     loaded = store.get_run("run-001")
 
     assert loaded is not None
@@ -863,7 +863,7 @@ def test_store_closes_connections_after_operations(tmp_path):
     TrackingConnection.close_count = 0
 
     store.initialize()
-    store.save_run(run)
+    store.create_run(run)
     database_path.unlink()
 
     assert TrackingConnection.close_count == 2
