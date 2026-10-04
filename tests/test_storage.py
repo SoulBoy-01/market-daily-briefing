@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+import re
 import sqlite3
 
 import pytest
@@ -679,6 +680,12 @@ def _create_legacy_tables(connection: sqlite3.Connection) -> None:
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> list[str]:
     return sorted(row[1] for row in connection.execute(f"pragma table_info({table})"))
+
+
+def test_schema_tables_tuple_covers_every_table_declared_in_schema():
+    declared = re.findall(r"create table if not exists (\w+)", SCHEMA)
+
+    assert sorted(declared) == sorted(SCHEMA_TABLES)
 
 
 def test_initialize_bring_legacy_tables_to_current_schema_columns(tmp_path):
