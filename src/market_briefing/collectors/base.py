@@ -4,7 +4,9 @@ from dataclasses import dataclass, field
 
 from market_briefing.domain import (
     AtomicFact,
+    EvidenceCandidate,
     MarketIndexRecord,
+    OfficialCheckResult,
     RawSnapshot,
     SectorSnapshotRecord,
 )
@@ -14,5 +16,7 @@ from market_briefing.domain import (
 class CollectionResult:
     snapshots: list[RawSnapshot]
     facts: list[AtomicFact]
+    candidates: tuple[EvidenceCandidate, ...] = ()
+    official_checks: tuple[OfficialCheckResult, ...] = ()
     market_index_records: list[MarketIndexRecord] = field(default_factory=list)
     sector_snapshot: SectorSnapshotRecord | None = None

@@ -10,8 +10,10 @@ from bs4 import BeautifulSoup
 from market_briefing.audit import SnapshotFile, run_directory, write_snapshot_text
 from market_briefing.collectors.base import CollectionResult
 from market_briefing.domain import (
-    AtomicFact,
+    EvidenceCandidate,
     FactClassification,
+    OfficialCheckResult,
+    OfficialCheckStatus,
     RawSnapshot,
     ReportType,
     SourceType,
@@ -42,14 +44,25 @@ class OfficialSourceCollector:
         fetched_at = datetime.now(timezone.utc)
         enabled_module_set = set(enabled_modules)
         snapshots: list[RawSnapshot] = []
-        facts: list[AtomicFact] = []
+        candidates: list[EvidenceCandidate] = []
+        official_checks: list[OfficialCheckResult] = []
 
         for index, target in enumerate(self.targets, start=1):
             if target.module not in enabled_module_set:
                 continue
 
-            response = self.client.get(target.source_url, timeout=15)
-            response.raise_for_status()
+            try:
+                response = self.client.get(target.source_url, timeout=15)
+                response.raise_for_status()
+            except httpx.HTTPError:
+                official_checks.append(
+                    OfficialCheckResult(
+                        source_name=target.source_name,
+                        module=target.module,
+                        status=OfficialCheckStatus.CHECK_FAILED,
+                    )
+                )
+                continue
 
             snapshot_file = _write_html(
                 raw_dir=raw_dir,
@@ -59,46 +72,62 @@ class OfficialSourceCollector:
                 source_index=index,
                 html=response.text,
             )
-            title, first_paragraph = _extract_title_and_first_paragraph(response.text)
-
-            snapshots.append(
-                RawSnapshot(
-                    snapshot_id=f"{run_id}-{target.module}-{index:03d}",
-                    run_id=run_id,
-                    module=target.module,
-                    source_name=target.source_name,
-                    source_url=target.source_url,
-                    source_type=target.source_type,
-                    fetched_at=fetched_at,
-                    content_type="text/html",
-                    raw_path=str(snapshot_file.path),
-                    content_sha256=snapshot_file.content_sha256,
-                    provider_name=target.source_name,
-                    license_ref=None,
-                    metadata={"title": title},
-                )
+            snapshot = RawSnapshot(
+                snapshot_id=f"{run_id}-{target.module}-{index:03d}",
+                run_id=run_id,
+                module=target.module,
+                source_name=target.source_name,
+                source_url=target.source_url,
+                source_type=target.source_type,
+                fetched_at=fetched_at,
+                content_type="text/html",
+                raw_path=str(snapshot_file.path),
+                content_sha256=snapshot_file.content_sha256,
+                provider_name=target.source_name,
+                license_ref=None,
+                metadata={},
             )
-            facts.append(
-                AtomicFact(
-                    fact_id=f"fact-{run_id}-{target.module}-{index:03d}",
+            snapshots.append(snapshot)
+
+            title, excerpt = _extract_title_and_excerpt(response.text)
+            if title is None:
+                official_checks.append(
+                    OfficialCheckResult(
+                        source_name=target.source_name,
+                        module=target.module,
+                        status=OfficialCheckStatus.CHECKED_NO_UPDATES,
+                    )
+                )
+                continue
+
+            candidates.append(
+                EvidenceCandidate(
+                    candidate_id=f"candidate-{run_id}-{target.module}-{index:03d}",
                     run_id=run_id,
-                    report_date=report_date,
-                    report_type=report_type,
+                    snapshot_id=snapshot.snapshot_id,
                     module=target.module,
-                    claim=f"{title}：{first_paragraph}",
-                    classification=FactClassification.FACT,
-                    source_name=target.source_name,
-                    source_url=target.source_url,
-                    source_type=target.source_type,
+                    title=title,
+                    detail_url=target.source_url,
                     published_at=None,
-                    fetched_at=fetched_at,
-                    confidence="high",
-                    raw_snapshot_path=str(snapshot_file.path),
-                    used_in_sections=[target.module],
+                    excerpt=excerpt,
+                    suggested_classification=FactClassification.FACT,
+                    created_at=fetched_at,
+                )
+            )
+            official_checks.append(
+                OfficialCheckResult(
+                    source_name=target.source_name,
+                    module=target.module,
+                    status=OfficialCheckStatus.CANDIDATES_FOUND,
                 )
             )
 
-        return CollectionResult(snapshots=snapshots, facts=facts)
+        return CollectionResult(
+            snapshots=snapshots,
+            facts=[],
+            candidates=tuple(candidates),
+            official_checks=tuple(official_checks),
+        )
 
 
 def default_official_targets() -> list[OfficialSourceTarget]:
@@ -136,10 +165,12 @@ def _write_html(
     return write_snapshot_text(raw_path, html)
 
 
-def _extract_title_and_first_paragraph(html: str) -> tuple[str, str]:
+def _extract_title_and_excerpt(html: str) -> tuple[str | None, str | None]:
     soup = BeautifulSoup(html, "html.parser")
-    title = soup.find("h1") or soup.find("title")
-    paragraph = soup.find("p")
-    title_text = title.get_text(strip=True) if title else "官方信息"
-    paragraph_text = paragraph.get_text(strip=True) if paragraph else "页面已抓取，需人工复核正文。"
-    return title_text, paragraph_text
+    title_node = soup.find("h1") or soup.find("title")
+    paragraph_node = soup.find("p")
+    title = title_node.get_text(strip=True) if title_node else None
+    paragraph = paragraph_node.get_text(strip=True) if paragraph_node else None
+    if not title:
+        return None, None
+    return title, paragraph or title

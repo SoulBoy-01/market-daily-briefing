@@ -3,7 +3,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import httpx
-import pytest
 
 from market_briefing.audit import verify_snapshot_hash
 from market_briefing.collectors.market_data import (
@@ -15,7 +14,13 @@ from market_briefing.collectors.official_sources import (
     OfficialSourceCollector,
     OfficialSourceTarget,
 )
-from market_briefing.domain import FactClassification, ReportType, SourceType
+from market_briefing.domain import (
+    FactClassification,
+    OfficialCheckResult,
+    OfficialCheckStatus,
+    ReportType,
+    SourceType,
+)
 
 
 class FakeMarketClient:
@@ -166,25 +171,29 @@ def test_market_data_collector_preserves_empty_sector_snapshot_for_degraded_gate
     assert Path(result.snapshots[0].raw_path).is_file()
 
 
-def test_official_source_collector_extracts_official_fact(tmp_path):
+def _official_target(source_name: str, url: str) -> OfficialSourceTarget:
+    return OfficialSourceTarget(
+        module="policy_regulation",
+        source_name=source_name,
+        source_url=url,
+        source_type=SourceType.EXCHANGE,
+    )
+
+
+ANNOUNCEMENT_HTML = (
+    "<html><head><title>监管动态</title></head>"
+    "<body><h1>监管动态</h1><p>交易所发布市场监管通报。</p></body></html>"
+)
+
+
+def test_official_source_collector_produces_candidate_instead_of_fact(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            html="<html><head><title>监管动态</title></head><body><h1>监管动态</h1><p>交易所发布市场监管通报。</p></body></html>",
-            request=request,
-        )
+        return httpx.Response(200, html=ANNOUNCEMENT_HTML, request=request)
 
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
     collector = OfficialSourceCollector(
         client=http_client,
-        targets=[
-            OfficialSourceTarget(
-                module="policy_regulation",
-                source_name="Mock Exchange",
-                source_url="https://example.test/policy",
-                source_type=SourceType.EXCHANGE,
-            )
-        ],
+        targets=[_official_target("Mock Exchange", "https://example.test/policy")],
     )
 
     result = collector.collect(
@@ -195,34 +204,37 @@ def test_official_source_collector_extracts_official_fact(tmp_path):
         raw_dir=tmp_path / "raw",
     )
 
+    assert result.facts == []
     assert len(result.snapshots) == 1
-    assert len(result.facts) == 1
-    assert result.facts[0].claim == "监管动态：交易所发布市场监管通报。"
-    assert result.facts[0].source_type == SourceType.EXCHANGE
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.candidate_id == "candidate-run-official-001-policy_regulation-001"
+    assert candidate.snapshot_id == result.snapshots[0].snapshot_id
+    assert candidate.module == "policy_regulation"
+    assert candidate.title == "监管动态"
+    assert candidate.excerpt == "交易所发布市场监管通报。"
+    assert candidate.detail_url == "https://example.test/policy"
+    assert candidate.suggested_classification == FactClassification.FACT
+    assert result.official_checks == (
+        OfficialCheckResult(
+            source_name="Mock Exchange",
+            module="policy_regulation",
+            status=OfficialCheckStatus.CANDIDATES_FOUND,
+        ),
+    )
     assert verify_snapshot_hash(
         Path(result.snapshots[0].raw_path), result.snapshots[0].content_sha256
     )
 
 
-def test_official_source_collector_fact_ids_are_isolated_by_run(tmp_path):
+def test_official_source_collector_candidate_ids_are_isolated_by_run(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            html="<html><head><title>监管动态</title></head><body><h1>监管动态</h1><p>交易所发布市场监管通报。</p></body></html>",
-            request=request,
-        )
+        return httpx.Response(200, html=ANNOUNCEMENT_HTML, request=request)
 
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
     collector = OfficialSourceCollector(
         client=http_client,
-        targets=[
-            OfficialSourceTarget(
-                module="policy_regulation",
-                source_name="Mock Exchange",
-                source_url="https://example.test/policy",
-                source_type=SourceType.EXCHANGE,
-            )
-        ],
+        targets=[_official_target("Mock Exchange", "https://example.test/policy")],
     )
 
     first = collector.collect(
@@ -240,39 +252,76 @@ def test_official_source_collector_fact_ids_are_isolated_by_run(tmp_path):
         raw_dir=tmp_path / "second-raw",
     )
 
-    first_fact_ids = {fact.fact_id for fact in first.facts}
-    second_fact_ids = {fact.fact_id for fact in second.facts}
+    first_ids = {candidate.candidate_id for candidate in first.candidates}
+    second_ids = {candidate.candidate_id for candidate in second.candidates}
 
-    assert first_fact_ids.isdisjoint(second_fact_ids)
-    assert all(fact_id.startswith("fact-run-official-001-") for fact_id in first_fact_ids)
-    assert all(fact_id.startswith("fact-run-official-002-") for fact_id in second_fact_ids)
+    assert first_ids.isdisjoint(second_ids)
+    assert all(candidate_id.startswith("candidate-run-official-001-") for candidate_id in first_ids)
+    assert all(candidate_id.startswith("candidate-run-official-002-") for candidate_id in second_ids)
 
 
-def test_official_source_collector_raises_http_status_error_for_enabled_target(tmp_path):
+def test_official_source_collector_degrades_failed_source_to_check_failed(tmp_path):
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, request=request)
+        if request.url.path == "/down":
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, html=ANNOUNCEMENT_HTML, request=request)
 
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
     collector = OfficialSourceCollector(
         client=http_client,
         targets=[
-            OfficialSourceTarget(
-                module="policy_regulation",
-                source_name="Mock Exchange",
-                source_url="https://example.test/policy",
-                source_type=SourceType.EXCHANGE,
-            )
+            _official_target("Down Exchange", "https://example.test/down"),
+            _official_target("Healthy Exchange", "https://example.test/healthy"),
         ],
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
-        collector.collect(
-            run_id="run-official-500",
-            report_date="2026-07-02",
-            report_type=ReportType.AFTER_CLOSE,
-            enabled_modules=["policy_regulation"],
-            raw_dir=tmp_path / "raw",
+    result = collector.collect(
+        run_id="run-official-500",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+        raw_dir=tmp_path / "raw",
+    )
+
+    statuses = {check.source_name: check.status for check in result.official_checks}
+    assert statuses["Down Exchange"] == OfficialCheckStatus.CHECK_FAILED
+    assert statuses["Healthy Exchange"] == OfficialCheckStatus.CANDIDATES_FOUND
+    assert len(result.snapshots) == 1
+    assert len(result.candidates) == 1
+    assert result.candidates[0].snapshot_id == result.snapshots[0].snapshot_id
+
+
+def test_official_source_collector_reports_no_updates_for_contentless_page(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            html="<html><head></head><body><div>导航菜单</div></body></html>",
+            request=request,
         )
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    collector = OfficialSourceCollector(
+        client=http_client,
+        targets=[_official_target("Mock Exchange", "https://example.test/policy")],
+    )
+
+    result = collector.collect(
+        run_id="run-official-empty",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["policy_regulation"],
+        raw_dir=tmp_path / "raw",
+    )
+
+    assert len(result.snapshots) == 1
+    assert result.candidates == ()
+    assert result.official_checks == (
+        OfficialCheckResult(
+            source_name="Mock Exchange",
+            module="policy_regulation",
+            status=OfficialCheckStatus.CHECKED_NO_UPDATES,
+        ),
+    )
 
 
 def test_official_source_collector_skips_disabled_targets_without_http_call(tmp_path):
@@ -282,14 +331,7 @@ def test_official_source_collector_skips_disabled_targets_without_http_call(tmp_
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
     collector = OfficialSourceCollector(
         client=http_client,
-        targets=[
-            OfficialSourceTarget(
-                module="policy_regulation",
-                source_name="Mock Exchange",
-                source_url="https://example.test/policy",
-                source_type=SourceType.EXCHANGE,
-            )
-        ],
+        targets=[_official_target("Mock Exchange", "https://example.test/policy")],
     )
 
     result = collector.collect(
@@ -302,3 +344,5 @@ def test_official_source_collector_skips_disabled_targets_without_http_call(tmp_
 
     assert result.snapshots == []
     assert result.facts == []
+    assert result.candidates == ()
+    assert result.official_checks == ()

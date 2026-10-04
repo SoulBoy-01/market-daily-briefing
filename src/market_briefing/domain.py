@@ -95,6 +95,13 @@ class OfficialCheckStatus(StrEnum):
     CHECK_FAILED = "check_failed"
 
 
+@dataclass(frozen=True)
+class OfficialCheckResult:
+    source_name: str
+    module: str
+    status: OfficialCheckStatus
+
+
 class SourceType(StrEnum):
     OFFICIAL = "official"
     EXCHANGE = "exchange"
