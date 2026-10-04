@@ -206,30 +206,12 @@ class BriefingStore:
             connection.execute(
                 "alter table reports add column markdown_sha256 text not null default ''"
             )
-            for row in connection.execute(
-                "select report_id, markdown_path from reports"
-            ).fetchall():
-                artifact_path = Path(row["markdown_path"])
-                if not artifact_path.is_file():
-                    continue
-                connection.execute(
-                    "update reports set markdown_sha256 = ? where report_id = ?",
-                    (sha256(artifact_path.read_bytes()).hexdigest(), row["report_id"]),
-                )
+            self._backfill_report_artifact_hashes(connection, "markdown_sha256", "markdown_path")
         if "html_sha256" not in report_columns:
             connection.execute(
                 "alter table reports add column html_sha256 text not null default ''"
             )
-            for row in connection.execute(
-                "select report_id, html_path from reports"
-            ).fetchall():
-                artifact_path = Path(row["html_path"])
-                if not artifact_path.is_file():
-                    continue
-                connection.execute(
-                    "update reports set html_sha256 = ? where report_id = ?",
-                    (sha256(artifact_path.read_bytes()).hexdigest(), row["report_id"]),
-                )
+            self._backfill_report_artifact_hashes(connection, "html_sha256", "html_path")
         connection.execute(
             """
             insert into run_events (run_id, from_status, to_status, created_at)
@@ -240,6 +222,23 @@ class BriefingStore:
             )
             """
         )
+
+    @staticmethod
+    def _backfill_report_artifact_hashes(
+        connection: sqlite3.Connection,
+        hash_column: str,
+        path_column: str,
+    ) -> None:
+        for row in connection.execute(
+            f"select report_id, {path_column} from reports"
+        ).fetchall():
+            artifact_path = Path(row[path_column])
+            if not artifact_path.is_file():
+                continue
+            connection.execute(
+                f"update reports set {hash_column} = ? where report_id = ?",
+                (sha256(artifact_path.read_bytes()).hexdigest(), row["report_id"]),
+            )
 
     def create_run(self, run: Run) -> None:
         try:

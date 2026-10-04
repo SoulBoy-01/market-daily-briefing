@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
-import re
 from typing import Annotated
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -15,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 from market_briefing.config import AppConfig, load_config
 from market_briefing.audit import (
+    SAFE_RUN_ID_RE,
     UnsafeAuditPathError,
     recover_orphaned_publication_directories,
     validate_report_date,
@@ -41,7 +41,6 @@ from market_briefing.storage import AuditIntegrityError, BriefingStore, RunAlrea
 PACKAGE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_DIR.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 SAFE_SOURCE_SCHEMES = {"fixture", "http", "https"}
 CHINA_MARKET_TIMEZONE = timezone(timedelta(hours=8))
 
@@ -354,7 +353,7 @@ def _report_template_context(
 
 
 def _validate_run_id(run_id: str) -> None:
-    if not RUN_ID_PATTERN.fullmatch(run_id):
+    if not SAFE_RUN_ID_RE.fullmatch(run_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="run_id 只能包含字母、数字、下划线和连字符",
@@ -367,7 +366,7 @@ def _validate_report_date(report_date: str) -> None:
     except UnsafeAuditPathError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="report_date 必须使用 YYYY-MM-DD 格式",
+            detail="report_date 必须是有效的日历日期（YYYY-MM-DD）",
         ) from exc
 
 
