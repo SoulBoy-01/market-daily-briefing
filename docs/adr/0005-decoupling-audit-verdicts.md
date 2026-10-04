@@ -31,6 +31,10 @@
    - `official_sources.py` 直接产出 `classification=FACT`、`confidence="high"` 的 AtomicFact，claim 取自页面 h1 与首个段落，违反设计文档第 8 节；
    - `llm.py` 的回退报告丢失 `previous_feedback_summary`，接通后会静默打断反馈闭环。
 
+## 修订（2026-10-05）
+
+决策 4 的两个接线前必修项与后果节登记的覆盖缺口已完成：官方采集改经候选项并输出三态检查结果（`999604d`）；`llm.py` 回退报告保留 `previous_feedback_summary`（`ab7bd33`）；孤儿回收启动路径补齐覆盖（`b2ca5a2`）。按来源定制的解析器仍被 ADR 0001 的来源登记阻塞，属阶段三本体工作。
+
 ## 后果
 
 - `schema.py` 拆分、`app.py` lifespan 化等被修正后的方案，在 ADR 0002 落地且漂移测试就位后另行评估，不与本批次混做。
