@@ -52,7 +52,10 @@ def default_config_path() -> Path:
 
 def create_app(config: AppConfig | None = None, store: BriefingStore | None = None) -> FastAPI:
     app_config = config or load_default_app_config()
-    briefing_store = store or BriefingStore(app_config.database_path)
+    briefing_store = store or BriefingStore(
+        app_config.database_path,
+        trusted_roots=(app_config.raw_dir, app_config.reports_dir),
+    )
     briefing_store.initialize()
     recover_orphaned_publication_directories(
         raw_dir=app_config.raw_dir,

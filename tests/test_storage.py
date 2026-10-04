@@ -1931,6 +1931,59 @@ def test_audit_integrity_rejects_missing_report_artifact_hash(tmp_path):
         store.assert_report_integrity(report.report_id)
 
 
+def test_publish_run_bundle_rejects_paths_outside_trusted_roots(tmp_path):
+    store = BriefingStore(
+        tmp_path / "briefing.sqlite",
+        trusted_roots=(tmp_path / "trusted" / "raw", tmp_path / "trusted" / "reports"),
+    )
+    store.initialize()
+    run = Run.create(
+        run_id="run-untrusted",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, warning, coverage = _publication_material(tmp_path / "outside", run)
+
+    with pytest.raises(InvalidPublicationBundleError, match="outside the trusted roots"):
+        store.publish_run_bundle(
+            snapshots=[snapshot],
+            facts=[fact],
+            report=report,
+            target_status=RunStatus.COMPLETED,
+        )
+
+
+def test_publish_run_bundle_accepts_paths_inside_trusted_roots(tmp_path):
+    trusted_root = tmp_path / "trusted"
+    store = BriefingStore(
+        tmp_path / "briefing.sqlite",
+        trusted_roots=(trusted_root / "raw", trusted_root / "reports"),
+    )
+    store.initialize()
+    run = Run.create(
+        run_id="run-trusted",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        enabled_modules=["market_indices"],
+    )
+    store.create_run(run)
+    store.transition_run(run.run_id, RunStatus.RUNNING)
+    snapshot, fact, report, warning, coverage = _publication_material(
+        trusted_root / "raw", run
+    )
+    store.publish_run_bundle(
+        snapshots=[snapshot],
+        facts=[fact],
+        report=report,
+        target_status=RunStatus.COMPLETED,
+    )
+
+    assert store.get_run(run.run_id).status == RunStatus.COMPLETED
+
+
 def test_initialize_backfills_report_artifact_hashes_for_existing_legacy_files(tmp_path):
     database_path = tmp_path / "legacy-report-hashes.sqlite"
     markdown_file = tmp_path / "legacy-visible.md"

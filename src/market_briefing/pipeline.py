@@ -302,7 +302,10 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    store = BriefingStore(config.database_path)
+    store = BriefingStore(
+        config.database_path,
+        trusted_roots=(config.raw_dir, config.reports_dir),
+    )
     store.initialize()
     result = run_fixture_pipeline(
         PipelineRequest(
