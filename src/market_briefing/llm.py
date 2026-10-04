@@ -42,6 +42,7 @@ def generate_with_optional_llm(
         markdown_path=markdown_path,
         html_path=html_path,
         fact_ledger_path=fact_ledger_path,
+        previous_feedback_summary=feedback_summary,
     )
 
     if provider is None:

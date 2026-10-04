@@ -98,6 +98,30 @@ def test_missing_provider_returns_template_report():
     assert result.report.sections[0].section_id == "one_sentence_conclusion"
 
 
+def test_fallback_report_carries_previous_feedback_summary():
+    result = generate_with_optional_llm(
+        provider=None,
+        report_id="report-001",
+        run_id="run-001",
+        report_date="2026-07-02",
+        report_type=ReportType.AFTER_CLOSE,
+        facts=[_fact()],
+        feedback_summary="平均评分：3.0\n下一轮观察清单：评分=3；备注=风险提示不足",
+        markdown_path="reports/briefing.md",
+        html_path="reports/briefing.html",
+        fact_ledger_path="reports/fact_ledger.json",
+    )
+
+    feedback_section = next(
+        section
+        for section in result.report.sections
+        if section.section_id == "previous_feedback"
+    )
+    assert result.used_fallback is True
+    assert "平均评分：3.0" in feedback_section.body
+    assert "风险提示不足" in feedback_section.body
+
+
 def test_bad_llm_output_falls_back_to_template_report():
     result = _generate(provider=BadProvider())
 
