@@ -1,0 +1,52 @@
+# 已批准来源注册表（ADR 0001 决策 3 / ADR 0006 决策 5）
+#
+# 本文件是来源许可审查的唯一记录。只登记已完成许可审查并获准用于本地、
+# 非商业、单维护者运行模式的来源；未完成审查的来源不得写入本文件。
+#
+# 当前状态：仅官方腿已登记。独立 API 腿（ADR 0001 要求双来源）尚无合规候选，
+# 因此 require_dual_sourced_symbols() 会拒绝解锁真实模式——这是预期行为。
+#
+# 字段说明：
+#   provider_kind        exchange_official（对应交易所官方来源）| independent_api（独立 API 服务）
+#   allows_store_response 必须为 true；ADR 0004 要求保存原始响应作为黄金案例证据
+#   allows_redistribute  本地学习项目一律为 false
+#   license_reviewed_at  条款审查日期（快照）
+#   conclusion           审查结论；条款解释风险须在此注明
+
+sources:
+  - provider_id: sse-official
+    provider_name: 上海证券交易所
+    provider_kind: exchange_official
+    module: market_indices
+    symbols:
+      - 000001.SH
+    access_method: public_json_endpoint
+    endpoint: https://query.sse.com.cn/commonQuery.do
+    license_url: https://www.sse.com.cn/home/legal/
+    allows_fetch: true
+    allows_store_response: true
+    allows_display: true
+    allows_redistribute: false
+    frequency_limit: daily_once_after_close
+    attribution: 数据来源：上海证券交易所
+    license_reviewed_at: '2026-10-05'
+    conclusion: accepted_with_interpretation_risk
+
+  - provider_id: szse-official
+    provider_name: 深圳证券交易所
+    provider_kind: exchange_official
+    module: market_indices
+    symbols:
+      - 399001.SZ
+      - 399006.SZ
+    access_method: public_json_endpoint
+    endpoint: https://www.szse.cn/api/report/ShowReport/data
+    license_url: http://www.szse.cn/application/laws/index.html
+    allows_fetch: true
+    allows_store_response: true
+    allows_display: true
+    allows_redistribute: false
+    frequency_limit: daily_once_after_close
+    attribution: 数据来源：深圳证券交易所
+    license_reviewed_at: '2026-10-05'
+    conclusion: accepted_with_interpretation_risk
