@@ -112,10 +112,15 @@ def require_dual_sourced_symbols(
 
 def _approved_source(entry: dict[str, Any]) -> ApprovedSource:
     for field in REQUIRED_FIELDS:
-        if entry.get(field) in (None, "", []):
+        # symbols 允许为空列表：官方政策来源不提供指数覆盖。
+        if entry.get(field) is None or entry.get(field) == "":
             raise SourceRegistryError(
                 f"source entry missing required field {field}: {entry.get('provider_id')}"
             )
+    if "symbols" not in entry or not isinstance(entry["symbols"], list):
+        raise SourceRegistryError(
+            f"symbols must be a list for {entry.get('provider_id')}"
+        )
     provider_kind = str(entry["provider_kind"])
     if provider_kind not in PROVIDER_KINDS:
         raise SourceRegistryError(
