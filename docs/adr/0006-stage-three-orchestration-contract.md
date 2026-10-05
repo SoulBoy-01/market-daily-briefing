@@ -26,6 +26,6 @@
 
 
 - CLI 新增 `collect-real` / `review-candidate` / `publish-run` 子命令；fixture 命令保持兼容。
-- 两个真实 `MarketDataClient` 实现与按来源定制的官方解析器是阶段三本体任务，依赖来源登记结果（调研进行中）。
+- 两个真实 `MarketDataClient` 实现与按来源定制的官方解析器是阶段三本体任务。来源调研已完成（`docs/research/` 两份报告）：交易所官方腿已登记，独立 API 腿无合规免费候选，真实模式维持禁用。
 - 市场温度、板块等可降级项缺失时走 `COMPLETED_WITH_WARNINGS`，界面按既有覆盖状态展示。
 - 本契约获批后，任务 12 可直接开工且不依赖来源登记完成——管线骨架可先用合成客户端验证（`mock_real` 模式），真实客户端随登记结果接入。
