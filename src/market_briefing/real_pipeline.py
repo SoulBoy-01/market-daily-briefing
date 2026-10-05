@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
+from decimal import Decimal
+import json
+from pathlib import Path
 
 from market_briefing.audit import rebase_audit_path, run_directory
 from market_briefing.collectors.base import CollectionResult
@@ -10,6 +13,8 @@ from market_briefing.collectors.official_sources import OfficialSourceCollector
 from market_briefing.config import AppConfig
 from market_briefing.domain import (
     AtomicFact,
+    CandidateReviewStatus,
+    FactClassification,
     MarketIndexRecord,
     ModuleCoverage,
     ModuleCoverageStatus,
@@ -22,13 +27,23 @@ from market_briefing.domain import (
     SectorSnapshotRecord,
 )
 from market_briefing.gates import evaluate_after_close_gate
+from market_briefing.audit import move_run_directory, verify_snapshot_hash
 from market_briefing.reconciliation import reconcile_core_indices
+from market_briefing.reporting import build_report, render_html, render_markdown
 from market_briefing.sources import (
     SourceRegistry,
     SourceRegistryError,
     require_dual_sourced_symbols,
 )
-from market_briefing.storage import BriefingStore
+from market_briefing.storage import (
+    BriefingStore,
+    PublishedRecordExistsError,
+    build_report_paths,
+)
+from market_briefing.validation import (
+    validate_real_publishable_facts,
+    validate_report_sections,
+)
 
 
 CORE_INDEX_SYMBOLS = ("000001.SH", "399001.SZ", "399006.SZ")
@@ -107,26 +122,8 @@ def collect_real_after_close(
         else CollectionResult(snapshots=[], facts=[])
     )
 
+    # 快照按暂存区真实路径入账；发布时随目录原子搬迁统一 rebase 到 raw/。
     snapshots = [*collected.snapshots, *official.snapshots]
-    staging_run_dir = run_directory(
-        config.effective_staging_dir,
-        request.report_date,
-        request.run_id,
-    )
-    destination_run_dir = run_directory(
-        config.raw_dir,
-        request.report_date,
-        request.run_id,
-    )
-    snapshots = [
-        replace(
-            snapshot,
-            raw_path=rebase_audit_path(
-                snapshot.raw_path, staging_run_dir, destination_run_dir
-            ),
-        )
-        for snapshot in snapshots
-    ]
 
     reconciliation = reconcile_core_indices(collected.market_index_records)
     gate = evaluate_after_close_gate(
@@ -145,6 +142,8 @@ def collect_real_after_close(
     warnings = _merge_warnings(request.run_id, gate.warnings, official.official_checks)
     coverage = _module_coverage(request, collected, official)
 
+    # 采集阶段的产物（快照、警告、覆盖状态）对候选审核界面可见，
+    # 因此此时就写入账本；发布阶段补齐事实与报告（ADR 0006 决策 2）。
     for snapshot in snapshots:
         store.save_snapshot(snapshot)
     for candidate in official.candidates:
@@ -174,13 +173,260 @@ def publish_real_after_close(
     request: RealAfterCloseRequest,
     config: AppConfig,
     store: BriefingStore,
-) -> None:
+):
+    run = store.get_run(request.run_id)
+    if run is None:
+        raise KeyError(request.run_id)
+    if run.status in (RunStatus.COMPLETED, RunStatus.COMPLETED_WITH_WARNINGS):
+        raise PublishedRecordExistsError(
+            f"运行 {request.run_id} 已发布，不可重复发布"
+        )
     pending = _pending_candidate_ids(store, request.run_id)
     if pending:
         raise RuntimeError(
             f"仍有待审核候选项（{', '.join(pending)}），请先完成审核再发布"
         )
-    raise NotImplementedError("发布动作将在候选审核接线后实现（ADR 0006 决策 2）")
+
+    snapshots = store.list_snapshots(request.run_id)
+    records = _index_records_from_snapshots(snapshots)
+    if not records:
+        raise RuntimeError("缺少核心指数原始快照，无法执行双来源核对，禁止发布")
+    reconciliation = reconcile_core_indices(records)
+    if not reconciliation.passed:
+        codes = ", ".join(error.code for error in reconciliation.blocking_errors)
+        raise RuntimeError(f"双来源核对未通过（{codes}），禁止发布")
+
+    facts = _publication_facts(
+        store=store,
+        request=request,
+        snapshots=snapshots,
+        reconciled=reconciliation.reconciled_indices,
+    )
+    real_validation = validate_real_publishable_facts(facts)
+    if not real_validation.ok:
+        raise RuntimeError(
+            "真实发布校验未通过：" + "；".join(real_validation.errors)
+        )
+
+    report = build_report(
+        report_id=f"report-{request.run_id}",
+        run_id=request.run_id,
+        report_date=request.report_date,
+        report_type=request.report_type,
+        facts=facts,
+        markdown_path="",
+        html_path="",
+        fact_ledger_path="",
+    )
+    sections = validate_report_sections(list(report.sections), facts)
+    if not sections.ok:
+        raise RuntimeError("报告校验未通过：" + "；".join(sections.errors))
+
+    paths = _write_real_report_artifacts(config=config, request=request, report=report, facts=facts)
+    final_report = replace(
+        report,
+        markdown_path=str(paths.markdown_path),
+        html_path=str(paths.html_path),
+        fact_ledger_path=str(paths.fact_ledger_path),
+    )
+
+    moved = move_run_directory(
+        config.effective_staging_dir,
+        config.raw_dir,
+        request.report_date,
+        request.run_id,
+    )
+    if moved is None:
+        raise RuntimeError(f"运行 {request.run_id} 没有产生暂存目录")
+    staging_run_dir = run_directory(
+        config.effective_staging_dir, request.report_date, request.run_id
+    )
+    destination_run_dir = run_directory(config.raw_dir, request.report_date, request.run_id)
+    published_snapshots = [
+        replace(
+            snapshot,
+            raw_path=rebase_audit_path(snapshot.raw_path, staging_run_dir, destination_run_dir),
+        )
+        for snapshot in snapshots
+    ]
+    published_facts = [
+        replace(
+            fact,
+            raw_snapshot_path=rebase_audit_path(
+                fact.raw_snapshot_path,
+                run_directory(
+                    config.effective_staging_dir, request.report_date, request.run_id
+                ),
+                run_directory(config.raw_dir, request.report_date, request.run_id),
+            ),
+        )
+        for fact in facts
+    ]
+    final_paths = build_report_paths(
+        reports_dir=config.reports_dir,
+        report_date=request.report_date,
+        report_type=request.report_type,
+        run_id=request.run_id,
+    )
+    final_report = replace(
+        report,
+        markdown_path=str(final_paths.markdown_path),
+        html_path=str(final_paths.html_path),
+        fact_ledger_path=str(final_paths.fact_ledger_path),
+    )
+    if final_paths.report_dir.exists():
+        raise FileExistsError(final_paths.report_dir)
+    final_paths.report_dir.parent.mkdir(parents=True, exist_ok=True)
+    paths.report_dir.rename(final_paths.report_dir)
+
+    store.rebase_snapshot_paths(
+        request.run_id,
+        {snapshot.snapshot_id: snapshot.raw_path for snapshot in published_snapshots},
+    )
+    store.publish_run_bundle(
+        snapshots=[],
+        facts=published_facts,
+        report=final_report,
+        target_status=RunStatus.COMPLETED,
+    )
+    return final_report
+
+
+def _index_records_from_snapshots(snapshots: list[RawSnapshot]) -> list[MarketIndexRecord]:
+    records: list[MarketIndexRecord] = []
+    for snapshot in snapshots:
+        if snapshot.module != "market_indices":
+            continue
+        verify_snapshot_hash(Path(snapshot.raw_path), snapshot.content_sha256)
+        rows = json.loads(Path(snapshot.raw_path).read_text(encoding="utf-8"))
+        records.extend(
+            MarketIndexRecord(
+                provider_id=str(snapshot.metadata["provider_id"]),
+                trade_date=date.fromisoformat(str(row["trade_date"])),
+                symbol=str(row["symbol"]),
+                close=Decimal(str(row["close"])),
+                change_pct=Decimal(str(row["change_pct"])),
+                evidence_id=snapshot.snapshot_id,
+            )
+            for row in rows
+        )
+    return records
+
+
+def _publication_facts(
+    *,
+    store: BriefingStore,
+    request: RealAfterCloseRequest,
+    snapshots: list[RawSnapshot],
+    reconciled: tuple,
+) -> list[AtomicFact]:
+    from market_briefing.review import build_fact_from_approved_candidate
+
+    facts: list[AtomicFact] = []
+    snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
+    for candidate_id, approved_fact_id, excerpt in _approved_candidates(store, request.run_id):
+        events = store.list_candidate_review_events(candidate_id)
+        review_event = events[-1]
+        candidate = store.get_candidate(candidate_id)
+        snapshot = snapshot_by_id.get(candidate.snapshot_id)
+        if snapshot is None:
+            raise RuntimeError(f"已批准候选 {candidate_id} 的快照缺失，禁止发布")
+        facts.append(
+            build_fact_from_approved_candidate(
+                candidate=candidate,
+                review_event=review_event,
+                snapshot=snapshot,
+                report_date=request.report_date,
+                report_type=request.report_type,
+            )
+        )
+        facts[-1] = replace(facts[-1], fact_id=approved_fact_id)
+
+    index_snapshot = next(
+        (snapshot for snapshot in snapshots if snapshot.module == "market_indices"),
+        None,
+    )
+    if index_snapshot is None:
+        raise RuntimeError("缺少核心指数快照，禁止发布")
+    for index in reconciled:
+        facts.append(
+            AtomicFact(
+                fact_id=f"fact-{request.run_id}-index-{index.symbol}",
+                run_id=request.run_id,
+                report_date=request.report_date,
+                report_type=request.report_type,
+                module="market_indices",
+                claim=(
+                    f"{index.symbol} 收盘 {index.close}，"
+                    f"较前一交易日 {index.change_pct}%"
+                    f"（双来源核对一致：{'、'.join(index.provider_ids)}）。"
+                ),
+                classification=FactClassification.FACT,
+                source_name="、".join(index.provider_ids),
+                source_url=index_snapshot.source_url,
+                source_type=index_snapshot.source_type,
+                published_at=None,
+                fetched_at=index_snapshot.fetched_at,
+                confidence="high",
+                raw_snapshot_path=index_snapshot.raw_path,
+                source_snapshot_id=index_snapshot.snapshot_id,
+                used_in_sections=["market_indices"],
+            )
+        )
+    return facts
+
+
+def _approved_candidates(store: BriefingStore, run_id: str) -> list[tuple[str, str, str]]:
+    approved: list[tuple[str, str, str]] = []
+    with store.connection() as connection:
+        rows = connection.execute(
+            """
+            select candidates.candidate_id, events.approved_fact_id
+            from evidence_candidates as candidates
+            join candidate_review_events as events
+              on events.candidate_id = candidates.candidate_id
+            where candidates.run_id = ?
+              and events.event_id = (
+                select latest.event_id
+                from candidate_review_events as latest
+                where latest.candidate_id = candidates.candidate_id
+                order by latest.event_id desc
+                limit 1
+              )
+              and events.to_status = ?
+            order by candidates.candidate_id
+            """,
+            (run_id, CandidateReviewStatus.APPROVED.value),
+        ).fetchall()
+    approved.extend((row["candidate_id"], row["approved_fact_id"], "") for row in rows)
+    return approved
+
+
+def _write_real_report_artifacts(*, config: AppConfig, request, report, facts):
+    report_dir = (
+        config.effective_staging_dir
+        / "reports"
+        / request.report_date
+        / request.report_type.value
+        / request.run_id
+    )
+    report_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = report_dir / "briefing.md"
+    html_path = report_dir / "briefing.html"
+    ledger_path = report_dir / "fact_ledger.json"
+    markdown = render_markdown(report, facts)
+    markdown_path.write_text(markdown, encoding="utf-8")
+    html_path.write_text(render_html(markdown), encoding="utf-8")
+    ledger_path.write_text(
+        json.dumps([fact.to_record() for fact in facts], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return build_report_paths(
+        reports_dir=config.effective_staging_dir / "reports",
+        report_date=request.report_date,
+        report_type=request.report_type,
+        run_id=request.run_id,
+    )
 
 
 @dataclass(frozen=True)

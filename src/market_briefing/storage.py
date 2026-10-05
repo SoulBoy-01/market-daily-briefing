@@ -425,6 +425,38 @@ class BriefingStore:
             ],
         )
 
+    def rebase_snapshot_paths(
+        self,
+        run_id: str,
+        paths_by_snapshot_id: dict[str, str],
+    ) -> None:
+        """暂存目录原子搬迁到 raw/ 后，重定位账本中的快照路径。
+
+        仅允许在 run 尚未终态时调用，且不得改变内容哈希——路径变了，
+        文件内容没变，这是同一份来源证据换了位置。
+        """
+        with self.connection() as connection:
+            connection.execute("begin immediate")
+            row = connection.execute(
+                "select status from runs where run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            if RunStatus(row["status"]) in TERMINAL_RUN_STATUSES:
+                raise InvalidPublicationBundleError(
+                    f"run {run_id} is terminal and cannot rebase snapshot paths"
+                )
+            for snapshot_id, raw_path in paths_by_snapshot_id.items():
+                cursor = connection.execute(
+                    "update source_snapshots set raw_path = ? where snapshot_id = ? and run_id = ?",
+                    (raw_path, snapshot_id, run_id),
+                )
+                if cursor.rowcount != 1:
+                    raise InvalidPublicationBundleError(
+                        f"snapshot {snapshot_id} is not part of run {run_id}"
+                    )
+
     def list_snapshots(self, run_id: str) -> list[RawSnapshot]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -1029,12 +1061,18 @@ class BriefingStore:
         connection: sqlite3.Connection,
         run_id: str,
     ) -> None:
+        # 已进入人工审核阶段的 run 允许携带采集产物（ADR 0006 决策 2：采集与发布
+        # 分两次写入同一 run）。但已发布事实与报告绝不可预置——那正是这条隔离
+        # 要防的旁路。
+        row = connection.execute(
+            "select status from runs where run_id = ?",
+            (run_id,),
+        ).fetchone()
+        collected_stage = row is not None and RunStatus(row["status"]) == RunStatus.AWAITING_REVIEW
         table_names = (
-            "source_snapshots",
-            "facts",
-            "reports",
-            "run_warnings",
-            "module_coverage",
+            ("reports", "facts")
+            if collected_stage
+            else ("source_snapshots", "facts", "reports", "run_warnings", "module_coverage")
         )
         occupied_tables = [
             table_name
@@ -1060,6 +1098,9 @@ class BriefingStore:
         run_id: str,
     ) -> None:
         snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
+        # 采集与发布分两次写入同一 run 时，候选引用的快照可能已持久化在账本里。
+        for persisted in _persisted_snapshots(connection, run_id):
+            snapshot_by_id.setdefault(persisted.snapshot_id, persisted)
         for fact in facts:
             if not fact.source_candidate_id:
                 continue
@@ -1236,7 +1277,19 @@ class BriefingStore:
         snapshot_by_id = {snapshot.snapshot_id: snapshot for snapshot in snapshots}
         if len(snapshot_by_id) != len(snapshots):
             raise InvalidPublicationBundleError("publication bundle contains duplicate snapshot IDs")
-        snapshot_by_path = {str(Path(snapshot.raw_path).resolve()): snapshot for snapshot in snapshots}
+        # 采集与发布可以分两次写入同一 run：事实引用的快照可能已持久化在账本里。
+        known_snapshots = {
+            **{snapshot.snapshot_id: snapshot for snapshot in snapshots},
+            **{
+                snapshot.snapshot_id: snapshot
+                for snapshot in self.list_snapshots(report.run_id)
+                if snapshot.snapshot_id not in snapshot_by_id
+            },
+        }
+        snapshot_by_path = {
+            str(Path(snapshot.raw_path).resolve()): snapshot
+            for snapshot in known_snapshots.values()
+        }
         for snapshot in snapshots:
             if snapshot.run_id != report.run_id:
                 raise InvalidPublicationBundleError(
@@ -1497,6 +1550,34 @@ class BriefingStore:
 
 def _to_json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _persisted_snapshots(
+    connection: sqlite3.Connection,
+    run_id: str,
+) -> list[RawSnapshot]:
+    rows = connection.execute(
+        "select * from source_snapshots where run_id = ? order by snapshot_id",
+        (run_id,),
+    ).fetchall()
+    return [
+        RawSnapshot(
+            snapshot_id=row["snapshot_id"],
+            run_id=row["run_id"],
+            module=row["module"],
+            source_name=row["source_name"],
+            source_url=row["source_url"],
+            source_type=SourceType(row["source_type"]),
+            fetched_at=datetime.fromisoformat(row["fetched_at"]),
+            content_type=row["content_type"],
+            raw_path=row["raw_path"],
+            content_sha256=row["content_sha256"],
+            provider_name=row["provider_name"],
+            license_ref=row["license_ref"],
+            metadata=json.loads(row["metadata"]),
+        )
+        for row in rows
+    ]
 
 
 def _section_to_record(section: ReportSection) -> dict[str, Any]:
